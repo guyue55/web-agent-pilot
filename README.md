@@ -86,11 +86,17 @@ scripts/
   e2e-test.mjs    浏览器端到端测试（真实 Chrome + 真实 LLM）
   online-check.mjs 部署环境站点可达率检查
   debug-page.mjs  单站点深度诊断
-  mock-llm.mjs    本地 Mock 模型服务（可控延迟，供下面三个定点回归用）
+  mock-llm.mjs    本地 Mock 模型服务（可控延迟，供下面几个定点回归用）
   check-stop.mjs  回归：点「停止」是否立刻中断在飞的模型请求
   check-panel-close.mjs 回归：点 Panel 的 X 之后能否把面板叫回来并继续用
   check-resume.mjs 回归：跨页面跳转后任务能否自动续跑（含超时/次数/跨站守卫）
+  check-nav-loop.mjs 回归：目标站反复自我重定向时能否被拦下且不误伤正常站点
+  check-ws.mjs   回归：WebSocket 隧道是否端到端可用
+  measure-panel-css.mjs 测量：目标站 CSS 对 Panel 的污染（与干净页逐属性对比）
+  fixtures/      测试夹具：敌意样式页、WebSocket 测试页、回显服务、静态服务
 ```
+
+`server/wsProxy.js` 是 WebSocket 隧道，`server/sessionState.js` 记会话的最近代理目标。
 
 ## 实现要点
 
@@ -101,6 +107,9 @@ scripts/
 - **登录态**：按浏览器 cookie（`pa_sid`）在服务端各自维护 CookieJar，避免目标站 Cookie 的 Domain/Path 冲突，也不会泄漏给浏览器。
 - **SSRF 防护（双路由全覆盖）**：代理路由与 LLM 转发路由均只允许 http(s)，且解析 DNS 后二次校验目标 IP 不属于私有 / 保留网段；兜底路由拒绝跨站（`Sec-Fetch-Site: cross-site`）请求，避免被第三方站点当作「以用户身份请求目标站」的中继。
 - **Agent 单实例**：bridge 对并发到达的配置消息做初始化去重，任何时刻最多一个 Agent / 一套遮罩，避免「双输入框、重复光标、多个动画循环」。
+- **浮层隔离**：目标站若在 `body`/`html` 上用 `transform`/`filter`/`contain`，会成为 `position: fixed` 的包含块 —— 实测面板距视图底部从 100px 变成 519px、光标遮罩同样被带偏（指向错误元素）。bridge 把 Panel 与 SimulatorMask 收拢到 `<html>` 下的 `#pa-overlay-root`（不建立包含块、显式声明可继承属性），定位与排版恢复稳定。
+- **WebSocket 隧道**：`/__paws/<scheme>/<host>/<path>` 在 `http.Server` 的 `upgrade` 事件里把客户端与目标站双向透传（不做帧解析），permessage-deflate、子协议、二进制帧端到端保持原样；与原 HTTP 代理共用同一套 SSRF 校验。`Sec-WebSocket-Key` 原样透传，`Origin` 改写为目标站自身源，Cookie 从会话 CookieJar 补发。
+- **导航死循环保护**：个别站点在不属于自己的域名下会反复自我跳转（实测知乎 `/signin`：直连 1 次即停，经代理 5 秒内 20 次），面板被反复冲掉、Agent 每次重建。bridge 统计同一地址 8 秒内的加载次数，达到 5 次即停止创建 Agent 并通知宿主，由宿主断开 iframe 并展示说明卡片（可「在新标签页打开原站」或「仍然继续」）。
 - **停止即断**：page-agent 传入的中止信号会一路带到真正的 `fetch` 上；此前该信号被丢弃，点「停止」后要等本次模型请求跑满超时才响应（实测 5s vs 修复后 2ms）。
 - **跨页面续跑**：目标页一跳转，iframe 里的 Agent / 历史会连根销毁。bridge 把「正在执行的任务」记进 `sessionStorage`，新页面就绪后自动接着执行（最多 2 次、90 秒内有效）；只有「同站跳转」或「来源是本应用代理页」才续跑，用户在地址栏另开站点不会把旧任务套上去。
 - **面板可恢复**：点 Panel 右上角的 X 会连 Agent 一起销毁（演示站靠书签重新注入，本项目没有这个入口）。顶栏新增「AI 面板」按钮，可识别已销毁的实例并重建，不必刷新页面。
@@ -110,7 +119,8 @@ scripts/
 - **API Key 存于 localStorage**：被代理页面的 JS 与主应用同源，理论上可读取它。请只在对该站点有基本信任的前提下使用本工具；介意的话可为每次会话使用独立的、低额度的 Key。
 
 - 服务端抓取目标是「无浏览器」的 HTTP 请求，因此 Cloudflare 五秒盾、人机验证码、**浏览器指纹校验**类站点（如 stackoverflow.com）无法通过；这不是本项目能解决的问题，需要真实浏览器方案。
-- WebSocket 暂未做服务端代理，相关功能（实时聊天、推送）在被代理页面中不可用。
+- **会校验域名的站点**：少数站点发现 `location.hostname` 不是自己时会在页面里反复自我跳转（实测知乎 `/signin`）。这类行为在客户端，代理层无法修正；已做「导航死循环保护」，到阈值后断开并提示改用新标签页打开。
+- **`!important` 的全局元素样式仍可能影响面板控件**：目标站若写 `button { background: red !important }`，它会压过 Panel 的类选择器样式（本项目已把定位、字体继承、字距/大小写等隔离掉，但控件外观无法在不引入 Shadow DOM 的前提下完全隔离）。实测淘宝/知乎等主流站点无可见影响；极端样式的站点可能让面板「变丑」，功能不受影响。
 - 部分站点会对数据中心出口 IP 限流（例如 Wikimedia 的 429）。
 - 页面若注入 `<script>` 时目标站已 CSP 严格限制，可能出现资源加载不全（HTTP 层已尽量剥离限制，但 HTML `<meta http-equiv=Content-Security-Policy>` 由服务端重写处理不到时会残留）。
 - 请遵守目标站点的服务条款，不要用它做未经授权的自动化操作。
@@ -122,6 +132,7 @@ scripts/
 | `PORT`             | `3000`  | 监听端口            |
 | `ALLOW_LOCALHOST`  | `false` | 是否允许代理本机 / 内网地址 |
 | `PROXY_TIMEOUT_MS` | `45000` | 单请求代理超时         |
+| `WS_CONNECT_TIMEOUT_MS` | `15000` | WebSocket 隧道建连超时 |
 | `DEBUG_LLM`        | 关闭      | 打印 LLM 转发日志     |
 | `DEBUG_PROXY`      | 关闭      | 打印代理细节          |
 
@@ -151,6 +162,20 @@ ALLOW_LOCALHOST=true PORT=3211 npm start
 npm run check:stop      # 点停止 → 立即中断（期望 <100ms）
 npm run check:panel     # 点 X → 面板消失、顶栏按钮叫回、新实例可执行
 npm run check:resume    # 跳转 → 自动续跑；次数/过期/跨站三种情况不续跑
+```
+
+浮层隔离、导航死循环、WebSocket 这三项还需要夹具服务：
+
+```bash
+npm run fixtures        # 3500：敌意样式页 + WS 测试页
+npm run mock:ws         # 3501：WebSocket 回显
+
+npm run check:ws        # WS 隧道是否端到端可用（含静态常量完整性）
+npm run check:nav-loop  # 知乎类「自我重定向」站点被拦下，正常站不误伤
+
+# 测量目标站 CSS 对 Panel 的污染（默认对比 example / 淘宝 / 知乎 / 必应）
+BASE=http://127.0.0.1:3211 npm run measure:css
+TARGETS="https://example.com,http://127.0.0.1:3500/hostile-css.html" BASE=http://127.0.0.1:3211 npm run measure:css
 ```
 
 ## 部署
