@@ -82,6 +82,18 @@
 				</div>
 				</div>
 				<div class="loading-bar" id="loading-bar"><span></span></div>
+				<!-- 目标站反复自我重定向时显示（见 bridge 的导航死循环保护） -->
+				<div class="blocked-notice" id="blocked-notice" hidden>
+					<div class="blocked-card">
+						<div class="blocked-icon">!</div>
+						<h2>这个站点拒绝在代理环境中运行</h2>
+						<p id="blocked-desc">它在打开后反复自我重定向，页面无法稳定停留，AI 也就无法接管。</p>
+						<div class="blocked-actions">
+							<a class="primary-btn" id="blocked-open" target="_blank" rel="noreferrer">在新标签页打开原站</a>
+							<button class="ghost-btn" id="blocked-retry" type="button">仍然继续</button>
+						</div>
+					</div>
+				</div>
 			</main>
 		</div>
 

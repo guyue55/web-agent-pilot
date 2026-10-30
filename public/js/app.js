@@ -54,6 +54,10 @@ const els = {
 	statusBadge: $('#status-badge'),
 	agentStatus: $('#agent-status'),
 	btnPanel: $('#btn-panel'),
+	blockedNotice: $('#blocked-notice'),
+	blockedDesc: $('#blocked-desc'),
+	blockedOpen: $('#blocked-open'),
+	blockedRetry: $('#blocked-retry'),
 	settingsMask: $('#settings-mask'),
 	toast: $('#toast'),
 }
@@ -209,6 +213,7 @@ async function resolveAndOpen(rawUrl) {
 		state.targetUrl = data.target
 		state.bridgeReady = false
 		els.homeGuide.hidden = true
+		els.blockedNotice.hidden = true
 		els.frame.src = withShare(data.proxyUrl) || data.proxyUrl
 		els.urlInput.value = data.target
 		els.btnNewTab.href = data.target
@@ -224,6 +229,38 @@ async function resolveAndOpen(rawUrl) {
 els.navForm.addEventListener('submit', (e) => {
 	e.preventDefault()
 	resolveAndOpen(els.urlInput.value)
+})
+
+// ------------------------------------------------------------------ 导航死循环
+// bridge 检测到「同一地址短时间内被反复加载」会发 nav-loop，这里主动断开 iframe 并说明原因。
+// 计数存在 sessionStorage 的 pa.navLoop 键上，与 iframe 同源共享，可直接清掉。
+const NAV_LOOP_KEY = 'pa.navLoop'
+
+function showBlockedNotice(data) {
+	try {
+		// 站点还在不停自我跳转，不断开 iframe 就永远停不下来
+		els.frame.src = 'about:blank'
+	} catch {
+		/* noop */
+	}
+	els.loadingBar.classList.remove('on')
+	const times = Number(data?.count) || 0
+	els.blockedDesc.textContent = times
+		? `它在打开后反复自我重定向（已连续 ${times} 次），页面无法稳定停留，AI 也就无法接管。`
+		: '它在打开后反复自我重定向，页面无法稳定停留，AI 也就无法接管。'
+	els.blockedOpen.href = state.targetUrl || '#'
+	els.blockedNotice.hidden = false
+	setAgentStatus('目标站反复重定向，已暂停', 'err')
+}
+
+els.blockedRetry.addEventListener('click', () => {
+	try {
+		sessionStorage.removeItem(NAV_LOOP_KEY)
+	} catch {
+		/* noop */
+	}
+	els.blockedNotice.hidden = true
+	if (state.targetUrl) resolveAndOpen(state.targetUrl)
 })
 
 els.frame.addEventListener('load', () => {
@@ -383,6 +420,12 @@ window.addEventListener('message', (event) => {
 		case 'pagehide':
 			state.bridgeReady = false
 			break
+		case 'nav-loop': {
+			// 目标站在反复自我重定向（实测知乎：5 秒内 20 次），继续跑只会空烧调用额度
+			state.bridgeReady = false
+			showBlockedNotice(data)
+			break
+		}
 		default:
 			break
 	}

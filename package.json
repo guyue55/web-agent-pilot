@@ -24,7 +24,8 @@
     "mock:llm": "node scripts/mock-llm.mjs",
     "check:stop": "node scripts/check-stop.mjs",
     "check:panel": "node scripts/check-panel-close.mjs",
-    "check:resume": "node scripts/check-resume.mjs"
+    "check:resume": "node scripts/check-resume.mjs",
+    "check:nav-loop": "node scripts/check-nav-loop.mjs"
   },
   "engines": {
     "node": ">=18.18"

@@ -767,6 +767,35 @@
 		post({ type: 'pagehide' })
 	})
 
+	// ---------------------------------------------------------- 导航死循环保护
+	// 有些站点会在「非官方域名」下反复自我跳转（实测知乎 /signin：直连 1 次即停，
+	// 经代理 5 秒内跳 20 次），面板被反复冲掉、Agent 每次都重建，用户什么也做不了，
+	// 还白白消耗模型调用。这里统计同一地址短时间内的重复加载次数，超阈值就交给宿主拦下。
+	const NAV_LOOP_KEY = 'pa.navLoop'
+	const NAV_LOOP_WINDOW_MS = 8000
+	const NAV_LOOP_LIMIT = 5
+
+	function trackLoad() {
+		try {
+			const key = location.pathname + location.search
+			const now = Date.now()
+			let prev = null
+			try {
+				prev = JSON.parse(sessionStorage.getItem(NAV_LOOP_KEY) || 'null')
+			} catch {
+				prev = null
+			}
+			const count = prev && prev.key === key && now - Number(prev.at || 0) < NAV_LOOP_WINDOW_MS
+				? Number(prev.count || 0) + 1
+				: 1
+			sessionStorage.setItem(NAV_LOOP_KEY, JSON.stringify({ key, at: now, count }))
+			return count
+		} catch {
+			// 存储不可用：不做保护，正常放行
+			return 1
+		}
+	}
+
 	window.__PABridge = {
 		get ready() {
 			return state.ready
@@ -780,6 +809,12 @@
 
 	// AI 执行前先确认 DOM 就绪，再通知宿主
 	function boot() {
+		const loads = trackLoad()
+		if (loads >= NAV_LOOP_LIMIT) {
+			// 不再创建 Agent / 面板：这个地址在反复重载，继续跑只会空烧调用额度
+			post({ type: 'nav-loop', count: loads, url: location.pathname + location.search })
+			return
+		}
 		state.ready = true
 		// 极速模式：先把已存在的图片换成占位图，避免慢 CDN 拖垮整页
 		neutralizeExistingImages()

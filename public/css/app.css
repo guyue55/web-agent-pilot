@@ -252,6 +252,64 @@ body {
 	display: none;
 }
 
+/* 目标站反复自我重定向时的兜底提示（盖住 iframe，避免继续闪烁） */
+.blocked-notice {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	background: linear-gradient(160deg, #fff8f5, #f6f0fb);
+	padding: 24px;
+	z-index: 20;
+}
+
+.blocked-notice[hidden] {
+	display: none;
+}
+
+.blocked-card {
+	max-width: 520px;
+	text-align: left;
+}
+
+.blocked-icon {
+	width: 40px;
+	height: 40px;
+	margin-bottom: 14px;
+	border-radius: 12px;
+	display: grid;
+	place-items: center;
+	font-weight: 700;
+	font-size: 22px;
+	color: #fff;
+	background: linear-gradient(135deg, #ff8a4c, #f4527d);
+}
+
+.blocked-card h2 {
+	margin: 0 0 10px;
+	font-size: 20px;
+	letter-spacing: -0.3px;
+}
+
+.blocked-card p {
+	margin: 0 0 18px;
+	color: var(--muted);
+	line-height: 1.65;
+}
+
+.blocked-actions {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.blocked-actions .primary-btn {
+	display: inline-flex;
+	align-items: center;
+	text-decoration: none;
+}
+
 .home-card {
 	max-width: 560px;
 	text-align: left;
