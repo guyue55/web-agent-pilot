@@ -118,6 +118,13 @@ body {
 	cursor: not-allowed;
 }
 
+/* AI 面板已显示时，顶栏按钮呈激活态，便于一眼看出面板在不在 */
+.icon-btn.active {
+	background: var(--brand-soft);
+	border-color: #cddafc;
+	color: var(--brand);
+}
+
 .primary-btn {
 	height: 34px;
 	padding: 0 16px;

@@ -415,15 +415,73 @@
 		if (typeof window.PageAgent !== 'function') throw new Error('PageAgent 未正确加载')
 	}
 
+	// 内部主动重建时也会触发 dispose 事件，用它抑制「面板被关闭」的误报
+	let disposingInternally = false
+
+	// ------------------------------------------------- 跨导航续跑（页面跳转后接着干）
+	// 目标站一跳转，iframe 里的整个 JS 上下文就销毁了：Agent 实例、历史、进度全丢，
+	// 任务半途而废（用户点「搜索」后最常见的断点）。这里把正在执行的任务记在
+	// sessionStorage（与宿主同源、同标签页），新页面 Agent 就绪后自动接着跑。
+	const PENDING_KEY = 'pa.pendingTask'
+	const RESUME_TTL_MS = 90 * 1000
+	const MAX_RESUMES = 2
+
+	/**
+	 * 当前文档对应的目标站 host。
+	 * iframe 地址形如 /__pa/https/www.baidu.com/s?wd=x，第二个路径段之后就是 host。
+	 */
+	function currentProxiedHost() {
+		const m = /^\/__pa\/[^/]+\/([^/?#]+)/.exec(location.pathname)
+		return m ? m[1] : ''
+	}
+
+	function savePending(task, resumes = 0) {
+		try {
+			sessionStorage.setItem(
+				PENDING_KEY,
+				JSON.stringify({ task, at: Date.now(), resumes, host: currentProxiedHost() })
+			)
+		} catch {
+			/* 隐私模式 / 存储被禁用：放弃续跑即可，不影响主流程 */
+		}
+	}
+
+	function clearPending() {
+		try {
+			sessionStorage.removeItem(PENDING_KEY)
+		} catch {
+			/* noop */
+		}
+	}
+
+	/** 读取待续跑任务；过期或次数用尽时返回 null，避免陈旧任务被误跑 */
+	function readPending() {
+		try {
+			const raw = sessionStorage.getItem(PENDING_KEY)
+			if (!raw) return null
+			const p = JSON.parse(raw)
+			if (!p || typeof p.task !== 'string' || !p.task.trim()) return null
+			if (Date.now() - Number(p.at || 0) > RESUME_TTL_MS) return null
+			if (Number(p.resumes || 0) >= MAX_RESUMES) return null
+			return p
+		} catch {
+			return null
+		}
+	}
+
 	function disposeAgent() {
 		if (state.agent) {
+			disposingInternally = true
 			try {
 				state.agent.dispose()
 			} catch {
 				/* noop */
 			}
+			disposingInternally = false
 			state.agent = null
 		}
+		// 旧实例已销毁，不能再拿它的 execute 去跑续跑任务
+		state.executeRaw = null
 	}
 
 	// 清理可能残留的 page-agent 遮罩 / 面板节点。
@@ -449,7 +507,11 @@
 	let agentStarting = null
 
 	async function ensureAgent() {
-		if (state.agent) return state.agent
+		// 用户点 Panel 右上角的 X，page-agent 内部会直接 dispose 整个 Agent：
+		// 实例对象还在、面板也消失了，但再下发任务会抛「PageAgent has been disposed」。
+		// 演示站可以靠书签重新注入，本项目没有这个入口，因此这里识别出
+		// 已销毁的实例并重建，否则用户点一下 X 之后就只能刷新页面。
+		if (state.agent && !state.agent.disposed) return state.agent
 		if (agentStarting) return agentStarting
 		agentStarting = (async () => {
 			try {
@@ -479,7 +541,9 @@
 			apiKey: cfg.apiKey,
 			language: cfg.language || 'zh-CN',
 			maxSteps: Number(cfg.maxSteps) || 40,
-			stepDelay: Number(cfg.stepDelay) ?? 0.4,
+			// 注意不能用 `Number(x) ?? 0.4`：Number(undefined) 是 NaN，而 NaN 不会被 ??
+			// 兜住，会一路传到 waitFor 让「步骤间隔」彻底失效（变成立即执行）
+			stepDelay: Number.isFinite(Number(cfg.stepDelay)) ? Number(cfg.stepDelay) : 0.4,
 			// 工具名幻觉（如把 execute_javascript 写成 script）多试几次通常能自愈；
 			// 但通道不可达时重试只会长耗时挂起，故默认仅 2 次
 			maxRetries: Number(cfg.maxRetries) || 2,
@@ -501,13 +565,66 @@
 		// 仅向宿主同步轻量状态，用于顶部状态徽标（聊天内容由 Panel 自身渲染）
 		agent.addEventListener('statuschange', () => {
 			post({ type: 'status', status: agent.status })
+			// 任务已有明确结局就不该再续跑；被导航打断时状态会永远停在 running
+			const st = agent.status
+			if (st === 'completed' || st === 'stopped' || st === 'error') clearPending()
 		})
 		agent.addEventListener('activity', (e) => {
 			post({ type: 'activity', detail: { type: e.detail?.type } })
 		})
+		// 用户在 Panel 上点 X 时，page-agent 会自己 dispose 掉整个 Agent。
+		// 通知宿主，让顶栏的「AI 面板」按钮能把它重新叫回来。
+		agent.addEventListener('dispose', () => {
+			if (disposingInternally) return
+			post({ type: 'panel-state', visible: false })
+		})
+
+		// Panel 直接调用 agent.execute(task)。包一层以记下任务原文（导航打断后要用它续跑），
+		// 同时把「原始 execute」留给续跑逻辑，避免续跑指令覆盖掉真正的任务文本。
+		const rawExecute = agent.execute.bind(agent)
+		state.executeRaw = rawExecute
+		agent.execute = (task) => {
+			if (typeof task === 'string' && task.trim()) savePending(task, 0)
+			return rawExecute(task)
+		}
 
 		state.agent = agent
+		post({ type: 'panel-state', visible: true })
 		return agent
+	}
+
+	/**
+	 * 新页面 Agent 就绪后，把上一个页面被打断的任务接着跑。
+	 * 必须在 configure 之后调用 —— Agent 到那一刻才刚被重建完成。
+	 */
+	function tryResume(agent) {
+		if (!agent || agent.disposed || agent.status === 'running') return
+		const pending = readPending()
+		if (!pending || typeof state.executeRaw !== 'function') return
+
+		// 只有当「确实是上一个页面跳过来的」才续跑：
+		//  · 同一目标站（搜索 → 结果页这类同站跳转，Referrer 可能被站点的
+		//    referrer-policy 抹掉，靠 host 判断）
+		//  · 或来源是本应用的代理页（点了链接跳到别的站，如百度 → 百科）
+		// 用户在地址栏另开一个站，两个条件都不满足，不会把旧任务套到新站上。
+		const inAppNav = (document.referrer || '').startsWith(`${location.origin}/__pa/`)
+		const sameHost = !!pending.host && pending.host === currentProxiedHost()
+		if (!inAppNav && !sameHost) return
+
+		const hint = [
+			`页面已跳转，请继续完成原任务：${pending.task}`,
+			'',
+			'注意：当前页面已经是跳转后的新页面，请先观察页面的真实状态再动手；',
+			'已经完成的步骤不要重复执行，如果任务目标已达成，直接结束并说明结果。',
+		].join('\n')
+
+		// 先记账再执行：万一这次又触发跳转，次数不会被重置成 0 而陷入死循环
+		const attempt = Number(pending.resumes || 0) + 1
+		savePending(pending.task, attempt)
+		post({ type: 'resume', task: pending.task, attempt })
+		Promise.resolve(state.executeRaw(hint)).catch((err) => {
+			post({ type: 'config-error', message: err?.message || String(err) })
+		})
 	}
 
 	// ---------------------------------------------------------- 消息监听
@@ -530,12 +647,27 @@
 					})
 					// 重建并展示 page-agent 内置 Panel（聊天 UI 在 iframe 内），由 Panel 自己驱动任务
 					disposeAgent()
+					let agent = null
 					try {
-						await ensureAgent()
+						agent = await ensureAgent()
 					} catch (err) {
 						post({ type: 'config-error', message: err?.message || String(err) })
 					}
 					post({ type: 'configured' })
+					// 刚跳转过来的页面：把上一个页面被中断的任务接上
+					tryResume(agent)
+					break
+				}
+				case 'show-panel': {
+					// 顶栏按钮：面板被关掉（或被目标页脚本误伤）时把它叫回来。
+					// ensureAgent 会自动重建已被 dispose 的实例
+					try {
+						const a = await ensureAgent()
+						a.panel.show()
+						post({ type: 'panel-state', visible: true })
+					} catch (err) {
+						post({ type: 'config-error', message: err?.message || String(err) })
+					}
 					break
 				}
 				default:
@@ -554,6 +686,10 @@
 	window.__PABridge = {
 		get ready() {
 			return state.ready
+		},
+		// 只读探针：诊断/测试时想看一眼实例状态，又不想因为 ensureAgent 触发重建
+		get agent() {
+			return state.agent
 		},
 		ensureAgent,
 	}

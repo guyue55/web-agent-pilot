@@ -53,6 +53,7 @@ const els = {
 	btnNewTab: $('#btn-newtab'),
 	statusBadge: $('#status-badge'),
 	agentStatus: $('#agent-status'),
+	btnPanel: $('#btn-panel'),
 	settingsMask: $('#settings-mask'),
 	toast: $('#toast'),
 }
@@ -286,6 +287,14 @@ document.querySelectorAll('.chip').forEach((chip) => {
 	})
 })
 
+// 用户在 Panel 上点 X 会连 Agent 一起销毁，且 Panel 随之消失。
+// 演示站可以靠书签重新注入，这里用顶栏按钮把面板叫回来
+els.btnPanel.addEventListener('click', () => {
+	if (!postToBridge({ type: 'show-panel' })) {
+		toast('请先打开一个网页，再显示 AI 面板')
+	}
+})
+
 // ------------------------------------------------------------------ 设置面板入口
 $('#btn-settings-top').addEventListener('click', openSettings)
 $('#btn-settings-close').addEventListener('click', closeSettings)
@@ -331,6 +340,13 @@ window.addEventListener('message', (event) => {
 		case 'configured':
 			setAgentStatus('Agent 已就绪')
 			break
+		case 'resume':
+			// 页面跳转打断了任务，新页面已自动接着跑
+			setAgentStatus(
+				`页面已跳转，继续执行任务${data.attempt > 1 ? `（第 ${data.attempt} 次续跑）` : ''}…`,
+				'busy'
+			)
+			break
 		case 'status': {
 			const s = data.status
 			if (s === 'running') setAgentStatus('执行中…', 'busy')
@@ -355,6 +371,15 @@ window.addEventListener('message', (event) => {
 			setAgentStatus('出错', 'err')
 			toast(data.message || '未知错误')
 			break
+		case 'panel-state': {
+			const visible = !!data.visible
+			els.btnPanel.classList.toggle('active', visible)
+			els.btnPanel.title = visible
+				? 'AI 面板已显示'
+				: 'AI 面板已关闭，点击重新显示'
+			if (!visible) setAgentStatus('AI 面板已关闭，点右上角按钮可重新显示', '')
+			break
+		}
 		case 'pagehide':
 			state.bridgeReady = false
 			break
