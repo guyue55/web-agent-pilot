@@ -56,6 +56,7 @@ const STRIP_REQUEST_HEADERS = [
 	'cookie',
 	'x-frame-options',
 	'sec-fetch-site', // 让目标站认为这是一次正常的 same-site 之外的直接访问
+	'sec-fetch-dest', // 避免目标站据此判定"被嵌在 iframe 中"而降级或拒绝响应
 	'accept-encoding', // 交由 node fetch 自行协商，避免二次压缩
 ]
 

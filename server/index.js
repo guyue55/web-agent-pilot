@@ -115,6 +115,10 @@ app.all('/api/llm/proxy', async (req, res) => {
 	if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
 		return res.status(400).json({ error: 'unsupported protocol' })
 	}
+	// 该接口可指向任意 URL，必须与代理路由同样做 SSRF 校验：
+	// 否则可被用于访问部署机本机端口、内网服务与云厂商元数据接口。
+	const targetErr = await assertTargetSafe(targetUrl)
+	if (targetErr) return res.status(403).json({ error: targetErr })
 
 	const headers = new Headers()
 	const rawHeaders = req.headers['x-pa-headers']
@@ -187,6 +191,33 @@ app.use(
 	})
 )
 
+/** 本站自有路径前缀：静态资源与自建接口，绝不能回落到目标站点 */
+const SELF_PATH_PREFIXES = ['/_app', '/api']
+
+/**
+ * 兜底路由只服务「由本站页面内部发起」的请求。
+ *
+ * 第三方站点诱导用户直接访问 https://本站/<目标站路径> 时，浏览器会带上
+ * Sec-Fetch-Site: cross-site；若照样套用会话记忆，本服务就成了以用户身份
+ * 向目标站发请求的中继（CSRF 放大），因此这类请求一律不兜底。
+ * 无该头部时（直接输入地址栏 / 老浏览器）视为用户主动访问，放行。
+ */
+function isOwnSiteRequest(req) {
+	const site = String(req.headers['sec-fetch-site'] || '')
+	if (!site) return true
+	return site === 'same-origin' || site === 'none'
+}
+
+/** 文档级导航（iframe / 主文档跳转），区别于 fetch / XHR 这类子资源请求 */
+function isNavigationRequest(req) {
+	const mode = String(req.headers['sec-fetch-mode'] || '')
+	if (mode) return mode === 'navigate'
+	const dest = String(req.headers['sec-fetch-dest'] || '')
+	if (dest) return dest === 'document' || dest === 'iframe'
+	// 无 Fetch Metadata（老浏览器）时按 Accept 兜底
+	return String(req.headers.accept || '').includes('text/html')
+}
+
 /**
  * 兜底路由：目标站内 JS 动态提交 / 赋值的同源路径（如 /s?wd=xxx）。
  * 优先从 Referer（被代理页面）还原目标站点；Referer 缺失或不可解析时，
@@ -194,11 +225,26 @@ app.use(
  * 覆盖百度搜索框这类 location.href / virtual-form 提交导致的漏网请求。
  */
 app.all('*', async (req, res, next) => {
+	// 本站自己的路径（含 miss 的静态资源与未知接口）直接走 404，避免返回目标站内容
+	if (SELF_PATH_PREFIXES.some((p) => req.path === p || req.path.startsWith(`${p}/`))) return next()
+	if (!isOwnSiteRequest(req)) return next()
+
 	const result = resolveFallbackRequest(req)
 	if (!result) return next()
 	if (result.error) return res.status(403).type('text/plain; charset=utf-8').send(result.error)
 	const err = await assertTargetSafe(result.url)
 	if (err) return res.status(403).type('text/plain; charset=utf-8').send(err)
+
+	// 文档导航：重定向回 /__pa/... 代理路径。
+	// 直接吐内容会让 iframe 的地址脱离代理前缀 —— 地址栏不再更新、后续 Referer 无法还原、
+	// 相对路径也会围绕本站根解析。子资源请求（fetch / XHR）不能重定向，否则会破坏调用方，
+	// 因此只把导航类请求 307（保留方法与请求体）到代理路径。
+	if (isNavigationRequest(req)) {
+		const share = req.query?.[SHARE_PARAM] ? String(req.query[SHARE_PARAM]) : ''
+		res.setHeader('cache-control', 'no-store')
+		return res.redirect(307, encodeProxyUrl(result.url, share))
+	}
+
 	try {
 		await proxyRequest(req, res, result.url)
 	} catch (err2) {
