@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>万能网页操作 Agent · 用自然语言操作任意网站</title>
+		<link rel="icon" href="/_app/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/_app/css/app.css" />
+	</head>
+	<body>
+		<div class="app">
+			<header class="topbar">
+				<div class="brand">
+					<span class="brand-logo">
+						<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+							<circle cx="12" cy="12" r="9" />
+							<path d="M3 12h18M12 3v18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4" opacity=".45" />
+						</svg>
+					</span>
+					<span class="brand-text">万能网页操作 Agent</span>
+				</div>
+
+				<form class="navbar" id="nav-form">
+					<button type="button" class="icon-btn" id="btn-back" title="后退">
+						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6" /></svg>
+					</button>
+					<button type="button" class="icon-btn" id="btn-forward" title="前进">
+						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6" /></svg>
+					</button>
+					<button type="button" class="icon-btn" id="btn-reload" title="刷新">
+						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3.5-7.1M21 3v6h-6" /></svg>
+					</button>
+					<input id="url-input" class="url-input" type="text" spellcheck="false" placeholder="输入任意网址，例如 https://www.baidu.com" />
+					<button type="submit" class="primary-btn" id="btn-go">打开</button>
+					<a class="icon-btn" id="btn-newtab" target="_blank" rel="noreferrer" title="在新标签页打开原始站点">
+						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7M21 3l-9 9M18 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" /></svg>
+					</a>
+				</form>
+
+			<div class="topbar-right">
+				<span class="badge" id="status-badge">模型未配置</span>
+				<span class="agent-status" id="agent-status"></span>
+				<button type="button" class="icon-btn ghost" id="btn-settings-top" title="大模型设置">
+						<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+							<circle cx="12" cy="12" r="3" />
+							<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 2 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6a2 2 0 1 1 4 0A1.7 1.7 0 0 0 15.9 5.8l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 20 11a2 2 0 1 1 0 4h-.6z" />
+						</svg>
+					</button>
+				</div>
+			</header>
+
+			<main class="stage">
+				<iframe
+					id="page-frame"
+					class="page-frame"
+					title="被操作的目标网页"
+					referrerpolicy="unsafe-url"
+					sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
+					allow="clipboard-read; clipboard-write; fullscreen; camera; microphone; geolocation; autoplay"
+				></iframe>
+				<div class="home-guide" id="home-guide">
+				<div class="home-card">
+					<h1>用一句话，让 AI 替你操作任意网站</h1>
+					<p>输入网址 → 在页面底部的 AI 面板里对话 → AI 自动点击、填表、翻页、提取数据。所有操作就在你的浏览器里完成。</p>
+					<div class="home-examples">
+						<button class="chip" data-url="https://www.baidu.com">百度</button>
+						<button class="chip" data-url="https://news.ycombinator.com">Hacker News</button>
+						<button class="chip" data-url="https://www.wikipedia.org">维基百科</button>
+						<button class="chip" data-url="https://example.com">Example</button>
+					</div>
+					<ol class="home-steps">
+						<li>先点击右上角齿轮，配置大模型（支持 OpenAI Chat / Responses、Anthropic）</li>
+						<li>在上方地址栏输入目标网址并打开</li>
+						<li>页面底部会自动出现 AI 面板，直接输入自然语言任务即可</li>
+					</ol>
+				</div>
+				</div>
+				<div class="loading-bar" id="loading-bar"><span></span></div>
+			</main>
+		</div>
+
+		<!-- 设置面板 -->
+		<div class="modal-mask" id="settings-mask" hidden>
+			<div class="modal" role="dialog" aria-modal="true">
+				<header class="modal-header">
+					<strong>大模型配置</strong>
+					<button class="icon-btn ghost" id="btn-settings-close">
+						<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
+					</button>
+				</header>
+				<div class="modal-body">
+					<div class="field">
+						<label>接口协议</label>
+						<div class="seg" id="protocol-seg">
+							<button data-protocol="openai-chat" class="active">OpenAI · Chat</button>
+							<button data-protocol="openai-responses">OpenAI · Responses</button>
+							<button data-protocol="anthropic">Anthropic</button>
+						</div>
+					</div>
+
+					<div class="field">
+						<label for="cfg-baseurl">Base URL</label>
+						<input id="cfg-baseurl" type="text" placeholder="https://api.openai.com/v1" />
+						<small class="hint" id="baseurl-hint"></small>
+					</div>
+
+					<div class="field">
+						<label for="cfg-model">模型名称</label>
+						<input id="cfg-model" type="text" placeholder="gpt-5-mini" />
+						<div class="quick-models" id="quick-models"></div>
+					</div>
+
+					<div class="field">
+						<label for="cfg-apikey">API Key <span class="req">*必填</span></label>
+						<input id="cfg-apikey" type="password" placeholder="sk-...（必填，否则调用会失败）" autocomplete="off" />
+						<small class="hint">密钥仅保存在你自己的浏览器 localStorage，不会上传服务器。DeepSeek / 硅基流动等需自备 Key。</small>
+					</div>
+
+					<div class="field-row">
+						<div class="field">
+							<label for="cfg-maxsteps">最大步数</label>
+							<input id="cfg-maxsteps" type="number" min="5" max="200" value="40" />
+						</div>
+						<div class="field">
+							<label for="cfg-stepdelay">每步间隔(秒)</label>
+							<input id="cfg-stepdelay" type="number" min="0" max="10" step="0.1" value="0.4" />
+						</div>
+					<div class="field">
+						<label for="cfg-maxtokens">最大输出 tokens</label>
+						<input id="cfg-maxtokens" type="number" min="256" max="64000" step="256" value="8192" />
+					</div>
+				</div>
+
+				<label class="switch">
+					<input type="checkbox" id="cfg-scripttool" />
+					<span>允许 Agent 在页面内执行 JavaScript（回车、拖拽等复杂交互需要它）</span>
+				</label>
+
+				<label class="switch">
+					<input type="checkbox" id="cfg-fastmode" />
+					<span>极速模式：跳过图片加载（大幅加快打开速度，操作类任务无需看图）</span>
+				</label>
+
+					<div class="field">
+						<label>请求通道</label>
+						<div class="seg" id="route-seg">
+							<button data-route="auto" class="active">自动（推荐）</button>
+							<button data-route="proxy">服务端代理</button>
+							<button data-route="direct">浏览器直连</button>
+						</div>
+						<small class="hint">
+							自动（推荐）：优先服务端代理（部署机能出网时最稳，可规避 CORS），不可达再回退浏览器直连。
+							<b>ZenMux 经本站点服务端代理不可达（部署机出网被拦截，会连接超时），请改用「浏览器直连」或保持「自动」</b>（自动对已识别的 ZenMux 域名会自动优先走浏览器直连）；若仍超时，可换 <b>DeepSeek 官方</b> / <b>硅基流动</b> 等国内可达提供方并填写 API Key。
+						</small>
+					</div>
+
+					<details class="advanced">
+						<summary>高级：自定义请求头</summary>
+						<div id="extra-headers"></div>
+						<button class="ghost-btn sm" id="btn-add-header" type="button">+ 添加请求头</button>
+					</details>
+
+					<div class="test-row">
+						<button class="ghost-btn" id="btn-test" type="button">测试连接</button>
+						<span class="test-result" id="test-result"></span>
+					</div>
+				</div>
+				<footer class="modal-footer">
+						<span class="presets">
+						快速填充：
+						<button class="link-btn" data-preset="deepseek">DeepSeek 官方（推荐）</button>
+						<button class="link-btn" data-preset="siliconflow">硅基流动</button>
+						<button class="link-btn" data-preset="openai">OpenAI</button>
+						<button class="link-btn" data-preset="anthropic">Anthropic</button>
+						<button class="link-btn" data-preset="zenmux">ZenMux（浏览器直连）</button>
+					</span>
+					<div class="modal-actions">
+						<button class="ghost-btn" id="btn-cancel" type="button">取消</button>
+						<button class="primary-btn" id="btn-save" type="button">保存</button>
+					</div>
+				</footer>
+			</div>
+		</div>
+
+		<div class="toast" id="toast" hidden></div>
+
+		<script type="module" src="/_app/js/app.js"></script>
+	</body>
+</html>

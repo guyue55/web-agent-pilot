@@ -1,0 +1,24 @@
+# 强制源码使用 LF 换行，避免 Windows / macOS 混用造成无意义 diff
+* text=auto eol=lf
+
+# 明确标记为文本
+*.js      text
+*.mjs     text
+*.cjs     text
+*.json    text
+*.jsonc   text
+*.html    text
+*.css     text
+*.md      text
+*.yml     text
+*.yaml    text
+
+# 二进制资源
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.svg     text
+*.woff    binary
+*.woff2   binary

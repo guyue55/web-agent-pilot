@@ -1,0 +1,31 @@
+{
+  "name": "ai-auto-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "万能网页操作 Agent —— 输入任意网址，用自然语言让 AI 帮你操作网页",
+  "keywords": [
+    "ai-agent",
+    "web-automation",
+    "page-agent",
+    "browser-agent",
+    "llm",
+    "web-agent",
+    "网页自动化"
+  ],
+  "author": "古月 <1724246050@qq.com>",
+  "license": "MIT",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=18.18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "tough-cookie": "^5.1.2",
+    "undici": "^6.29.1"
+  }
+}
