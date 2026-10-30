@@ -261,6 +261,82 @@
 		return el.closest(PA_OWNED_SELECTOR) !== null
 	}
 
+	// ------------------------------------------------ 浮层隔离（防目标站 CSS 破坏定位）
+	// 目标站若在 body/html 上使用了 transform / filter / perspective / contain，
+	// 就会成为 position:fixed 的「包含块」：实测 body{transform} 的页面上，
+	// 面板距视口底部从 100px 变成 519px、光标遮罩同样被带偏（指向错误位置）。
+	// 把 page-agent 的浮层挪到 <html> 下的专用容器（脱离 body 子树）即可恢复视口定位；
+	// 同时在容器上显式声明可继承属性，阻断目标站的字体/字距/颜色渗进面板。
+	const OVERLAY_ROOT_ID = 'pa-overlay-root'
+	const OVERLAY_ID_PREFIX = 'page-agent-runtime_'
+
+	function ensureOverlayRoot() {
+		let root = document.getElementById(OVERLAY_ROOT_ID)
+		if (root) return root
+		if (!document.documentElement) return null
+		root = document.createElement('div')
+		root.id = OVERLAY_ROOT_ID
+		root.setAttribute('data-page-agent-ignore', '')
+		root.setAttribute('data-browser-use-ignore', '')
+		// 只写「阻断污染」必需的声明：不建立包含块，不改变子元素定位语义
+		root.style.cssText = [
+			'all: initial',
+			'display: block',
+			'position: static',
+			'contain: none',
+			'inset: auto',
+			'font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
+			'font-size: 16px',
+			'font-weight: 400',
+			'font-style: normal',
+			'line-height: 1.5',
+			'letter-spacing: normal',
+			'word-spacing: normal',
+			'text-transform: none',
+			'text-indent: 0',
+			'text-align: left',
+			'white-space: normal',
+			'direction: ltr',
+			'color: #000',
+		].join(';')
+		document.documentElement.appendChild(root)
+
+		// 目标站常写 `div { letter-spacing: 5px !important }` 这类全局规则：它是元素选择器
+		// 带 !important，行内样式也压不住，会顺着继承把面板文字拉花。
+		// 这四个属性 Panel 自身一处都没用到（已核对 Panel.module.css），强制归位零风险。
+		try {
+			const style = document.createElement('style')
+			style.setAttribute('data-page-agent-ignore', '')
+			style.textContent = `
+				#${OVERLAY_ROOT_ID}, #${OVERLAY_ROOT_ID} * {
+					letter-spacing: normal !important;
+					word-spacing: normal !important;
+					text-transform: none !important;
+					text-indent: 0 !important;
+				}
+			`
+			document.head.appendChild(style)
+		} catch {
+			/* 注入失败不影响主功能 */
+		}
+
+		return root
+	}
+
+	/** 把 page-agent 的浮层（Panel / SimulatorMask）统一收拢到隔离容器里 */
+	function adoptOverlays() {
+		const root = ensureOverlayRoot()
+		if (!root) return
+		for (const el of document.querySelectorAll(`[id^="${OVERLAY_ID_PREFIX}"]`)) {
+			if (el.parentElement === root) continue
+			try {
+				root.appendChild(el)
+			} catch {
+				/* 极端情况下移动失败：保持原样，不影响功能 */
+			}
+		}
+	}
+
 	function normalizeAttributes(node) {
 		if (!node || node.nodeType !== 1 || !node.getAttribute) return
 		if (isPageAgentOwned(node)) return
@@ -363,6 +439,12 @@
 			for (const m of mutations) {
 				if (m.type !== 'childList') continue
 				m.addedNodes.forEach((n) => {
+					// page-agent 的浮层（Panel / 遮罩）一出现就收拢到隔离容器，
+					// 避免被目标站的 transform/filter 带偏定位、被全局 CSS 污染
+					if (n.nodeType === 1 && typeof n.id === 'string' && n.id.startsWith(OVERLAY_ID_PREFIX)) {
+						adoptOverlays()
+						return
+					}
 					// page-agent 自身 UI 的高频 DOM 变更直接跳过，避免逐节点扫描拖垮帧率
 					if (isPageAgentOwned(n)) return
 					normalizeAttributes(n)
@@ -561,6 +643,8 @@
 		} catch (err) {
 			console.warn('[pa-bridge] Panel 显示失败', err)
 		}
+		// 面板刚创建时还在 body 里，立刻收拢到隔离容器（脱离 body 的 transform/filter）
+		adoptOverlays()
 
 		// 仅向宿主同步轻量状态，用于顶部状态徽标（聊天内容由 Panel 自身渲染）
 		agent.addEventListener('statuschange', () => {
