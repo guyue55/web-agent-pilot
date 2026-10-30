@@ -186,7 +186,6 @@ export async function proxyRequest(req, res, targetUrl) {
 	const refererForBase = originalReferer ? new URL(originalReferer) : null
 
 	const controller = new AbortController()
-	const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 	let method = req.method.toUpperCase()
 	if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) method = 'GET'
 
@@ -198,6 +197,11 @@ export async function proxyRequest(req, res, targetUrl) {
 	let upstream
 	let attempt = 0
 	let lastError = null
+	// 每次重试都重建计时器：
+	// 此前在 catch 里 clearTimeout 后再 timer.refresh()，实测 Node 中被 clear 的 Timeout
+	// 无法被 refresh 复活，导致重试请求没有任何超时保护（可无限挂起，直到客户端断开）。
+	const armTimer = () => setTimeout(() => controller.abort(), TIMEOUT_MS)
+	let timer = armTimer()
 	while (attempt < RETRY_TIMES + 1) {
 		attempt++
 		try {
@@ -211,8 +215,8 @@ export async function proxyRequest(req, res, targetUrl) {
 			})
 			break
 		} catch (err) {
-			clearTimeout(timer)
 			if (err.name === 'AbortError' && Object.prototype.hasOwnProperty.call(err, 'cause') === false) {
+				clearTimeout(timer)
 				res.status(502).type('text/plain; charset=utf-8').send(`目标站点响应超时（>${TIMEOUT_MS}ms）`)
 				return
 			}
@@ -220,8 +224,9 @@ export async function proxyRequest(req, res, targetUrl) {
 			lastError = info.message
 			if (!info.retryable || attempt > RETRY_TIMES || method !== 'GET') break
 			await sleep(400 * attempt)
-			// GET 重试：重建超时计时
-			timer.refresh?.()
+			// GET 重试：重开超时窗口
+			clearTimeout(timer)
+			timer = armTimer()
 		}
 	}
 	clearTimeout(timer)

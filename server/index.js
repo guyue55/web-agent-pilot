@@ -23,7 +23,14 @@ const PORT = Number(process.env.PORT || 3000)
 const app = express()
 app.disable('x-powered-by')
 
-/** 极简 cookie 解析（仅需 pa_sid） */
+/**
+ * Cookie 解析 + 会话 sid 分配
+ *
+ * - 解析失败容忍：畸形百分号编码（如 `%zz`）会让 decodeURIComponent 抛异常，
+ *   若在这里抛出会连带整个请求 500，因此单条失败时保留原值。
+ * - pa_sid 在访问任意页面（含首页）时就下发：此前只对 /__pa 路径下发，
+ *   导致首次 / 非 /__pa 请求落到公用会话（'default'），多用户共用同一个服务端 CookieJar。
+ */
 app.use((req, res, next) => {
 	req.cookies = {}
 	const raw = req.headers.cookie
@@ -32,15 +39,15 @@ app.use((req, res, next) => {
 			const idx = part.indexOf('=')
 			if (idx === -1) continue
 			const key = part.slice(0, idx).trim()
-			const value = decodeURIComponent(part.slice(idx + 1).trim())
-			req.cookies[key] = value
+			if (!key) continue
+			const value = part.slice(idx + 1).trim()
+			try {
+				req.cookies[key] = value ? decodeURIComponent(value) : value
+			} catch {
+				req.cookies[key] = value
+			}
 		}
 	}
-	next()
-})
-
-/** pa_sid：每个浏览器会话独立的 CookieJar */
-app.use('/__pa', (req, res, next) => {
 	if (!req.cookies.pa_sid) {
 		const sid = crypto.randomUUID()
 		res.cookie('pa_sid', sid, { httpOnly: true, sameSite: 'lax', path: '/' })
