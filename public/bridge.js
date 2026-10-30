@@ -43,6 +43,22 @@
 		fastMode: true,
 	}
 
+	// 大模型服务域名集合：这些域名不走「页面代理 /__pa/」，必须让浏览器真实出网。
+	// 否则「浏览器直连」通道的请求会被 rewriteUrl 错误改写成 /__pa/https/<host>/...
+	// 经部署机转发，而部署机往往出网受限（如连不上 zenmux.ai），导致 45s 级超时。
+	// 服务端代理通道走 /api/llm/proxy，已在本文件 SELF_PATHS 中豁免，不受影响。
+	const noProxyHosts = new Set()
+	function refreshNoProxyHosts() {
+		noProxyHosts.clear()
+		if (state.config?.baseURL) {
+			try {
+				noProxyHosts.add(new URL(state.config.baseURL).host)
+			} catch {
+				/* 非法 URL 忽略 */
+			}
+		}
+	}
+
 	// 1x1 透明占位图，替代被跳过的图片请求
 	const IMG_PLACEHOLDER =
 		"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='1'%20height='1'%3E%3C/svg%3E"
@@ -112,6 +128,9 @@
 			}
 			return raw
 		}
+		// 大模型服务域名：浏览器直连需要真实出网，服务端代理走 /api/llm/proxy，
+		// 若错误改写到 /__pa/ 页面代理会因部署机出网受限而超时。故直接放行。
+		if (noProxyHosts.has(abs.host)) return raw
 		return toProxyPath(abs)
 	}
 
@@ -378,6 +397,7 @@
 		disposeAgent()
 
 		const cfg = state.config
+		refreshNoProxyHosts()
 		const baseURL = cfg.baseURL.replace(/\/+$/, '')
 		const agent = new window.PageAgent({
 			model: cfg.model,
@@ -427,6 +447,7 @@
 			switch (type) {
 				case 'configure': {
 					state.config = payload
+					refreshNoProxyHosts()
 					state.fastMode = payload?.fastMode !== false
 					// 应用极速模式到已存在的图片
 					document.querySelectorAll('img').forEach((img) => {
