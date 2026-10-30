@@ -18,7 +18,13 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:ui": "node scripts/ui-check.mjs",
+    "mock:llm": "node scripts/mock-llm.mjs",
+    "check:stop": "node scripts/check-stop.mjs",
+    "check:panel": "node scripts/check-panel-close.mjs",
+    "check:resume": "node scripts/check-resume.mjs"
   },
   "engines": {
     "node": ">=18.18"
