@@ -343,8 +343,10 @@ body {
 }
 
 .modal {
-	width: 560px;
-	max-width: 100%;
+	/* min() 而不是 width + max-width：
+	   在 grid 容器里百分比最大宽度会被自身 max-content 撑开，
+	   窄屏下 560px 固定宽度会溢出视口、右侧内容被裁掉 */
+	width: min(560px, 100%);
 	max-height: 88vh;
 	display: flex;
 	flex-direction: column;
@@ -548,6 +550,73 @@ body {
 }
 
 /* ---------------- toast ---------------- */
+/* ---------------- 响应式 ---------------- */
+/* 中等屏：先收掉品牌文字，给地址栏让出空间 */
+@media (max-width: 1024px) {
+	.brand-text {
+		display: none;
+	}
+
+	.topbar {
+		gap: 10px;
+		padding: 0 10px;
+	}
+
+	.badge,
+	.agent-status {
+		max-width: 150px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+}
+
+/* 窄屏 / 平板竖屏：地址栏换到第二行，避免出现被挤扁的输入框 */
+@media (max-width: 640px) {
+	.topbar {
+		height: auto;
+		flex-wrap: wrap;
+		padding: 8px 10px;
+		row-gap: 6px;
+	}
+
+	.navbar {
+		order: 3;
+		flex-basis: 100%;
+	}
+
+	.topbar-right {
+		margin-left: auto;
+	}
+
+	.field-row {
+		grid-template-columns: 1fr;
+	}
+
+	.modal-footer {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 8px;
+	}
+
+	.modal-actions {
+		justify-content: flex-end;
+	}
+
+	#btn-go {
+		padding: 0 12px;
+	}
+
+	.home-card h1 {
+		font-size: 20px;
+	}
+
+	.home-examples {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+	}
+}
+
 .toast {
 	position: fixed;
 	left: 50%;
@@ -559,6 +628,7 @@ body {
 	color: #fff;
 	font-size: 13px;
 	z-index: 10001;
+	max-width: calc(100vw - 32px);
 	box-shadow: var(--shadow-lg);
 	animation: toastIn 0.2s ease;
 }
@@ -571,14 +641,5 @@ body {
 	from {
 		opacity: 0;
 		transform: translate(-50%, 8px);
-	}
-}
-
-@media (max-width: 640px) {
-	.brand-text {
-		display: none;
-	}
-	.badge {
-		display: none;
 	}
 }
