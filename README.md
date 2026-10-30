@@ -86,6 +86,10 @@ scripts/
   e2e-test.mjs    浏览器端到端测试（真实 Chrome + 真实 LLM）
   online-check.mjs 部署环境站点可达率检查
   debug-page.mjs  单站点深度诊断
+  mock-llm.mjs    本地 Mock 模型服务（可控延迟，供下面三个定点回归用）
+  check-stop.mjs  回归：点「停止」是否立刻中断在飞的模型请求
+  check-panel-close.mjs 回归：点 Panel 的 X 之后能否把面板叫回来并继续用
+  check-resume.mjs 回归：跨页面跳转后任务能否自动续跑（含超时/次数/跨站守卫）
 ```
 
 ## 实现要点
@@ -97,6 +101,9 @@ scripts/
 - **登录态**：按浏览器 cookie（`pa_sid`）在服务端各自维护 CookieJar，避免目标站 Cookie 的 Domain/Path 冲突，也不会泄漏给浏览器。
 - **SSRF 防护（双路由全覆盖）**：代理路由与 LLM 转发路由均只允许 http(s)，且解析 DNS 后二次校验目标 IP 不属于私有 / 保留网段；兜底路由拒绝跨站（`Sec-Fetch-Site: cross-site`）请求，避免被第三方站点当作「以用户身份请求目标站」的中继。
 - **Agent 单实例**：bridge 对并发到达的配置消息做初始化去重，任何时刻最多一个 Agent / 一套遮罩，避免「双输入框、重复光标、多个动画循环」。
+- **停止即断**：page-agent 传入的中止信号会一路带到真正的 `fetch` 上；此前该信号被丢弃，点「停止」后要等本次模型请求跑满超时才响应（实测 5s vs 修复后 2ms）。
+- **跨页面续跑**：目标页一跳转，iframe 里的 Agent / 历史会连根销毁。bridge 把「正在执行的任务」记进 `sessionStorage`，新页面就绪后自动接着执行（最多 2 次、90 秒内有效）；只有「同站跳转」或「来源是本应用代理页」才续跑，用户在地址栏另开站点不会把旧任务套上去。
+- **面板可恢复**：点 Panel 右上角的 X 会连 Agent 一起销毁（演示站靠书签重新注入，本项目没有这个入口）。顶栏新增「AI 面板」按钮，可识别已销毁的实例并重建，不必刷新页面。
 
 ## 已知限制
 
@@ -129,6 +136,21 @@ PA_TEST_KEY=sk-xxx PROTOCOL=anthropic node scripts/e2e-test.mjs
 CASES='[{"target":"https://www.bing.com","task":"搜索 deepseek v4"}]' node scripts/e2e-test.mjs
 
 BASE=https://<域名> SHARECODE=xxx node scripts/online-check.mjs   # 检查部署环境的站点可达率
+```
+
+三个定点回归需要一个可控延迟的本地模型服务，另开两个终端：
+
+```bash
+# 终端 1：Mock 模型（延迟 4000ms，便于在「请求在飞」时做中断/跳转实验）
+MOCK_PORT=3400 MOCK_DELAY=4000 npm run mock:llm
+
+# 终端 2：本应用（放行本机地址，Mock 走 127.0.0.1）
+ALLOW_LOCALHOST=true PORT=3211 npm start
+
+# 终端 3：三个检查（浏览器路径可用 CHROME_PATH 覆盖）
+npm run check:stop      # 点停止 → 立即中断（期望 <100ms）
+npm run check:panel     # 点 X → 面板消失、顶栏按钮叫回、新实例可执行
+npm run check:resume    # 跳转 → 自动续跑；次数/过期/跨站三种情况不续跑
 ```
 
 ## 部署
