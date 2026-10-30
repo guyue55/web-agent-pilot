@@ -18,6 +18,7 @@ import {
 	SHARE_PARAM,
 } from './rewrite.js'
 import { checkProxyTarget, resolveAddresses, isSafeIpForProxy } from './security.js'
+import { rememberTarget, getRememberedTarget } from './sessionState.js'
 
 const HOP_BY_HOP = [
 	'connection',
@@ -236,6 +237,11 @@ export async function proxyRequest(req, res, targetUrl) {
 	const setCookies = upstream.headers.getSetCookie?.() ?? []
 	await storeCookies(jar, setCookies, targetUrl.href)
 
+	// 记住该会话最近代理的目标站点：目标站 JS 发出的同源绝对路径请求
+	// （如 location.href='/s?wd=x'，无法在注入层改写）到达服务端时若缺少
+	// 可解析 Referer，兜底路由可据此还原目标站点，避免 404
+	rememberTarget(sessionId, targetUrl)
+
 	// 重定向：改写 Location 交回浏览器，让 iframe 地址栏同步更新
 	const location = upstream.headers.get('location')
 	if (location) {
@@ -318,6 +324,30 @@ export function resolveFallbackTarget(req) {
 function refererReqPath(req) {
 	const p = req.originalUrl || '/'
 	return p.startsWith('/') ? p : `/${p}`
+}
+
+/**
+ * 统一兜底解析：优先用 Referer 还原目标站点；Referer 缺失或不可解析时，
+ * 回退到「会话最近代理的目标 origin」+ 当前请求路径。
+ *
+ * 覆盖场景（此前均会 404）：
+ *  - 目标站 JS `location.href = '/path?...'`（location 不可覆写，注入层拦不住）
+ *  - 动态 form.submit()（如百度 virtual-form），且页面声明 no-referrer / 仅 origin
+ */
+export function resolveFallbackRequest(req) {
+	const referer = req.headers.referer
+	if (referer && referer.includes(PROXY_PREFIX)) {
+		const viaReferer = resolveFallbackTarget(req)
+		if (viaReferer) return viaReferer
+	}
+	const remembered = getRememberedTarget(req.cookies?.pa_sid || 'default')
+	if (!remembered) return null
+	try {
+		// 访问码不属于目标站，需剔除；路径为站内同源绝对路径，直接挂到目标 origin
+		return { url: new URL(remembered.origin + stripShare(refererReqPath(req))), via: 'session' }
+	} catch {
+		return null
+	}
 }
 
 /** 目标主机是否允许代理（二次 DNS 校验，防 DNS rebinding） */

@@ -10,7 +10,7 @@ import { decodeProxyUrl, encodeProxyUrl, PROXY_PREFIX, SHARE_PARAM } from './rew
 import {
 	proxyRequest,
 	assertTargetSafe,
-	resolveFallbackTarget,
+	resolveFallbackRequest,
 	paFetch,
 	UPSTREAM_PROXY,
 } from './proxy.js'
@@ -181,13 +181,13 @@ app.use(
 )
 
 /**
- * 兜底路由：目标站内 JS 动态提交 / 赋值的同源路径（如 /s?wd=xxx）
- * 只要 Referer 来自被代理页面，就还原到对应站点并走代理。
+ * 兜底路由：目标站内 JS 动态提交 / 赋值的同源路径（如 /s?wd=xxx）。
+ * 优先从 Referer（被代理页面）还原目标站点；Referer 缺失或不可解析时，
+ * 回退到「该会话最近代理的目标站点」（见 resolveFallbackRequest），
+ * 覆盖百度搜索框这类 location.href / virtual-form 提交导致的漏网请求。
  */
 app.all('*', async (req, res, next) => {
-	const referer = req.headers.referer
-	if (!referer || !referer.includes(PROXY_PREFIX)) return next()
-	const result = resolveFallbackTarget(req)
+	const result = resolveFallbackRequest(req)
 	if (!result) return next()
 	if (result.error) return res.status(403).type('text/plain; charset=utf-8').send(result.error)
 	const err = await assertTargetSafe(result.url)
@@ -199,8 +199,11 @@ app.all('*', async (req, res, next) => {
 	}
 })
 
-app.use((_req, res) => {
-	res.status(404).type('text/plain; charset=utf-8').send('404 Not Found')
+app.use((req, res) => {
+	res
+		.status(404)
+		.type('text/plain; charset=utf-8')
+		.send(`404 Not Found（${req.method} ${req.path}）`)
 })
 
 // express 4 错误处理兜底

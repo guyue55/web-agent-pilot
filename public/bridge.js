@@ -329,11 +329,35 @@
 		[HTMLAudioElement, [['src']]],
 		[HTMLTrackElement, [['src']]],
 		[HTMLEmbedElement, [['src']]],
+		// 锚点 / 表单：站点 JS 常通过属性赋值改写链接与提交地址
+		// （如百度搜索框 virtual-form 提交 /s）。不拦截的话会以「本站同源路径」
+		// 直接导航，绕过代理触发服务端 404
+		[HTMLAnchorElement, [['href']]],
+		[HTMLAreaElement, [['href']]],
+		[HTMLFormElement, [['action']]],
+		[HTMLButtonElement, [['formAction']]],
+		[HTMLInputElement, [['formAction']]],
 	]) {
 			for (const [p, transform] of props) patchUrlProperty(Ctor.prototype, p, transform)
 		}
 	} catch {
 		/* 原型不可改时忽略，不影响主流程 */
+	}
+
+	// 动态 form.submit()：站点常在运行时改写 action 后原生提交（百度 virtual-form）。
+	// 提交前再规范化一次 action，确保请求回流代理而非落到本站路径导致 404
+	try {
+		const originalFormSubmit = HTMLFormElement.prototype.submit
+		HTMLFormElement.prototype.submit = function () {
+			try {
+				normalizeAttributes(this)
+			} catch {
+				/* noop */
+			}
+			return originalFormSubmit.call(this)
+		}
+	} catch {
+		/* noop */
 	}
 
 	try {
