@@ -377,13 +377,20 @@ window.addEventListener('message', (event) => {
 		case 'configured':
 			setAgentStatus('Agent 已就绪')
 			break
-		case 'resume':
-			// 页面跳转打断了任务，新页面已自动接着跑
+		case 'resume': {
+			// 页面跳转打断了任务，新页面已自动接着跑 —— 把原任务带出来，用户才知道在续什么
+			const task = String(data.task || '')
+			const brief = task.length > 24 ? `${task.slice(0, 24)}…` : task
+			const extra = []
+			if (data.attempt > 1) extra.push(`第 ${data.attempt} 次续跑`)
+			if (data.steps > 0) extra.push(`已带 ${data.steps} 步上下文`)
 			setAgentStatus(
-				`页面已跳转，继续执行任务${data.attempt > 1 ? `（第 ${data.attempt} 次续跑）` : ''}…`,
+				`页面已跳转，继续执行：${brief}${extra.length ? `（${extra.join('，')}）` : ''}`,
 				'busy'
 			)
+			toast(`页面跳转，已自动续跑：${brief}`)
 			break
+		}
 		case 'status': {
 			const s = data.status
 			if (s === 'running') setAgentStatus('执行中…', 'busy')

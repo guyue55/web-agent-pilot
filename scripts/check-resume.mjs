@@ -153,6 +153,32 @@ await sleep(4000)
 const log5 = await mockLog()
 results.otherHostIgnored = !log5.some((e) => JSON.stringify(e).includes('这条属于别的站点'))
 
+// ---------- 场景 6：带「上一页动作摘要」的续跑提示 ----------
+// 说明：旧页面的 history 不能直接灌进新 Agent（会拼进 <agent_history> 伪造上下文），
+// 这里验证的是「摘要被写进续跑提示词」这条正确路径。
+await page.evaluate(() => {
+	sessionStorage.setItem(
+		'pa.pendingTask',
+		JSON.stringify({
+			task: '带步骤的续跑任务',
+			at: Date.now(),
+			resumes: 0,
+			host: 'example.com',
+			steps: ['点击搜索框', '输入关键词 → 已输入「page agent」'],
+		})
+	)
+})
+await mockReset()
+await page.evaluate((cfg) => {
+	window.postMessage({ source: 'pa-host', type: 'configure', payload: cfg }, location.origin)
+}, CONFIG)
+await sleep(3500)
+const log6 = await mockLog()
+const hit6 = log6.find((e) => String(e.body || '').includes('上一页（已经离开）执行过的动作'))
+results.stepsInHint = !!hit6
+results.stepsContentKept = !!hit6 && String(hit6.body).includes('输入关键词')
+results.taskWithSteps = !!hit6 && String(hit6.body).includes('带步骤的续跑任务')
+
 console.log('\n===== 跨导航续跑验证 =====')
 const ok = (v) => (v ? '✅' : '❌')
 console.log(`  执行中已记录任务原文      : ${ok(results.pendingRecorded)}`)
@@ -163,5 +189,8 @@ console.log(`  任务结束后记录被清除      : ${ok(results.clearedAfterDo
 console.log(`  次数用尽后不再续跑        : ${ok(results.capRespected)}`)
 console.log(`  过期任务不续跑            : ${ok(results.expiredIgnored)}`)
 console.log(`  开别的站点不套用旧任务    : ${ok(results.otherHostIgnored)}`)
+console.log(`  续跑提示含上一页动作摘要  : ${ok(results.stepsInHint)}`)
+console.log(`  摘要内容完整              : ${ok(results.stepsContentKept)}`)
+console.log(`  原任务文本同时保留        : ${ok(results.taskWithSteps)}`)
 
 await browser.close()

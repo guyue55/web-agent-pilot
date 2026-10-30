@@ -523,14 +523,43 @@
 		return m ? m[1] : ''
 	}
 
-	function savePending(task, resumes = 0) {
+	function savePending(task, resumes = 0, steps = []) {
 		try {
 			sessionStorage.setItem(
 				PENDING_KEY,
-				JSON.stringify({ task, at: Date.now(), resumes, host: currentProxiedHost() })
+				JSON.stringify({ task, at: Date.now(), resumes, host: currentProxiedHost(), steps })
 			)
 		} catch {
 			/* 隐私模式 / 存储被禁用：放弃续跑即可，不影响主流程 */
+		}
+	}
+
+	/**
+	 * 把「上一页已经做过的动作」压成短摘要存进待续跑记录。
+	 *
+	 * 注意：不能把旧 history 直接灌进新 Agent —— page-agent 会把 history 里的
+	 * step/observation 拼进 <agent_history> 送给模型（已核对 PageAgentCore），
+	 * 那等于给模型伪造「当前页面已经执行过」的记忆，会漏做步骤。
+	 * 所以这里只保留一份纯文本参考，写进续跑提示词并明确标注「上一页」。
+	 */
+	function updatePendingSteps(history) {
+		try {
+			const raw = sessionStorage.getItem(PENDING_KEY)
+			if (!raw) return
+			const pending = JSON.parse(raw)
+			if (!pending || typeof pending.task !== 'string') return
+			const steps = []
+			for (const e of history || []) {
+				if (e?.type !== 'step') continue
+				const goal = String(e.reflection?.next_goal || '').replace(/\s+/g, ' ').trim()
+				const output = String(e.action?.output || '').replace(/\s+/g, ' ').trim()
+				const line = [goal, output].filter(Boolean).join(' → ')
+				if (line) steps.push(line.slice(0, 120))
+			}
+			pending.steps = steps.slice(-4)
+			sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending))
+		} catch {
+			/* 摘要只是锦上添花，失败就退回仅凭任务文本续跑 */
 		}
 	}
 
@@ -662,6 +691,10 @@
 		agent.addEventListener('activity', (e) => {
 			post({ type: 'activity', detail: { type: e.detail?.type } })
 		})
+		// 每步结束都把「已做动作」写进待续跑记录，供跳转后的续跑提示参考
+		agent.addEventListener('historychange', () => {
+			updatePendingSteps(agent.history)
+		})
 		// 用户在 Panel 上点 X 时，page-agent 会自己 dispose 掉整个 Agent。
 		// 通知宿主，让顶栏的「AI 面板」按钮能把它重新叫回来。
 		agent.addEventListener('dispose', () => {
@@ -701,17 +734,21 @@
 		const sameHost = !!pending.host && pending.host === currentProxiedHost()
 		if (!inAppNav && !sameHost) return
 
+		const priorSteps = Array.isArray(pending.steps) ? pending.steps.filter(Boolean) : []
 		const hint = [
 			`页面已跳转，请继续完成原任务：${pending.task}`,
 			'',
+			...(priorSteps.length
+				? ['上一页（已经离开）执行过的动作，仅供参考：', ...priorSteps.map((s, i) => `${i + 1}. ${s}`), '']
+				: []),
 			'注意：当前页面已经是跳转后的新页面，请先观察页面的真实状态再动手；',
 			'已经完成的步骤不要重复执行，如果任务目标已达成，直接结束并说明结果。',
 		].join('\n')
 
 		// 先记账再执行：万一这次又触发跳转，次数不会被重置成 0 而陷入死循环
 		const attempt = Number(pending.resumes || 0) + 1
-		savePending(pending.task, attempt)
-		post({ type: 'resume', task: pending.task, attempt })
+		savePending(pending.task, attempt, priorSteps)
+		post({ type: 'resume', task: pending.task, attempt, steps: priorSteps.length })
 		Promise.resolve(state.executeRaw(hint)).catch((err) => {
 			post({ type: 'config-error', message: err?.message || String(err) })
 		})
