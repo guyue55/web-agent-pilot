@@ -28,7 +28,8 @@
     "check:panel": "node scripts/check-panel-close.mjs",
     "check:resume": "node scripts/check-resume.mjs",
     "check:nav-loop": "node scripts/check-nav-loop.mjs",
-    "check:ws": "node scripts/check-ws.mjs"
+    "check:ws": "node scripts/check-ws.mjs",
+    "measure:css": "node scripts/measure-panel-css.mjs"
   },
   "engines": {
     "node": ">=18.18"

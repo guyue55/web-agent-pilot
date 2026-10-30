@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN" style="font-size: 20px">
+<head>
+<meta charset="utf-8">
+<title>敌意样式夹具：模拟重样式站点对 Panel 的污染</title>
+<style>
+	/* ---------- 1) 影响 position:fixed 包含块 ---------- */
+	body {
+		margin: 0;
+		min-height: 300px;
+		transform: translateZ(0); /* 让 fixed 相对 body 而非视口 */
+		filter: saturate(1.2);    /* 同样会建立包含块 */
+		font-family: Georgia, serif;
+		font-size: 22px;
+		line-height: 2;
+		letter-spacing: 2px;
+		color: #c00;
+	}
+
+	/* ---------- 2) 元素选择器 + !important 穿透一切 class ---------- */
+	button {
+		background: #e60012 !important;
+		color: #fff !important;
+		border: 6px dashed #000 !important;
+		border-radius: 0 !important;
+		padding: 30px !important;
+		font: 700 34px/1 Georgia, serif !important;
+		letter-spacing: 6px !important;
+		text-transform: uppercase !important;
+	}
+	input, textarea {
+		background: #ff0 !important;
+		color: #000 !important;
+		border: 5px solid #00f !important;
+		font: 700 28px/2 monospace !important;
+		padding: 20px !important;
+		height: auto !important;
+	}
+	div { letter-spacing: 5px !important; }
+
+	/* ---------- 3) 全局动画/过渡禁用 + 指针事件 ---------- */
+	* {
+		transition: none !important;
+		animation-duration: 0s !important;
+		-webkit-font-smoothing: antialiased;
+	}
+	svg { transform: scale(1.4); }
+</style>
+</head>
+<body>
+	<h1>敌意样式测试页</h1>
+	<p>这个页面的 CSS 会全局命中 button / input / div / svg，用来检验注入的 AI 面板是否被污染。</p>
+	<button type="button">普通按钮</button>
+	<input value="普通输入框">
+</body>
+</html>
