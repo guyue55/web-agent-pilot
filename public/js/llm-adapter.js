@@ -380,20 +380,33 @@ function safeHost(u) {
 	try { return new URL(u).host } catch { return '' }
 }
 
-/** 合并用户传入的 abort 信号与超时信号，避免无限挂起 */
-function makeSignal(cfg, timeoutMs) {
-	const timeout = AbortSignal.timeout(timeoutMs || LLM_TIMEOUT_MS)
-	if (cfg?.signal) {
-		try {
-			return AbortSignal.any([cfg.signal, timeout])
-		} catch {
-			return timeout
-		}
-	}
-	return timeout
+/**
+ * 区分「用户主动取消」与「请求超时」。
+ * 两者都会让 fetch 抛出 AbortError，但只有前者必须立刻向上传递：
+ * 超时属于调用失败，还需要继续尝试另一条通道。
+ */
+function isUserAbort(externalSignal) {
+	return !!externalSignal?.aborted
 }
 
-async function viaProxy(cfg, url, headers, body, timeoutMs) {
+/**
+ * 合并「用户中止」与「超时」两个信号，避免无限挂起。
+ *
+ * externalSignal 是 page-agent 传进来的 abort 信号（用户点停止 / 关闭时才 abort）。
+ * 之前这里只读 cfg.signal（配置项上根本不存在这个字段），等于把用户的中止意图
+ * 丢掉了：点了停止之后，本次请求仍会跑满超时才结束，界面长时间卡在「执行中」。
+ */
+function makeSignal(timeoutMs, externalSignal) {
+	const timeout = AbortSignal.timeout(timeoutMs || LLM_TIMEOUT_MS)
+	if (!externalSignal) return timeout
+	try {
+		return AbortSignal.any([externalSignal, timeout])
+	} catch {
+		return timeout
+	}
+}
+
+async function viaProxy(url, headers, body, timeoutMs, externalSignal) {
 	const res = await sendWithRetry(withShare('/api/llm/proxy'), {
 		method: 'POST',
 		headers: {
@@ -402,17 +415,17 @@ async function viaProxy(cfg, url, headers, body, timeoutMs) {
 			'x-pa-headers': btoa(unescape(encodeURIComponent(JSON.stringify(headers)))),
 		},
 		body: JSON.stringify(body),
-		signal: makeSignal(cfg, timeoutMs),
+		signal: makeSignal(timeoutMs, externalSignal),
 	})
 	return { ok: res.ok, status: res.status, text: await res.text(), channel: 'proxy' }
 }
 
-async function viaDirect(cfg, url, headers, body, timeoutMs) {
+async function viaDirect(url, headers, body, timeoutMs, externalSignal) {
 	const res = await sendWithRetry(url, {
 		method: 'POST',
 		headers,
 		body: JSON.stringify(body),
-		signal: makeSignal(cfg, timeoutMs),
+		signal: makeSignal(timeoutMs, externalSignal),
 	})
 	return { ok: res.ok, status: res.status, text: await res.text(), channel: 'direct' }
 }
@@ -423,7 +436,10 @@ async function viaDirect(cfg, url, headers, body, timeoutMs) {
  * route = 'proxy'  | 只走服务端转发（规避 CORS，但需要部署机器能出网）
  * route = 'direct' | 只走浏览器直连（需要服务商允许跨域）
  */
-async function dispatch(cfg, url, headers, body) {
+async function dispatch(cfg, url, headers, body, externalSignal) {
+	// 用户已经取消：不必再发请求，直接让中止意图向上传递
+	externalSignal?.throwIfAborted()
+
 	const mode = cfg.route || 'auto'
 	let order
 	if (mode === 'proxy') order = ['proxy', 'direct']
@@ -442,8 +458,8 @@ async function dispatch(cfg, url, headers, body) {
 			// auto 模式下先对代理通道做短探测，不可达则尽快回退浏览器直连
 			const useProbe = mode === 'auto' && channel === 'proxy'
 			const r = channel === 'proxy'
-				? await viaProxy(cfg, url, headers, body, useProbe ? PROBE_TIMEOUT_MS : undefined)
-				: await viaDirect(cfg, url, headers, body, DIRECT_TIMEOUT_MS)
+				? await viaProxy(url, headers, body, useProbe ? PROBE_TIMEOUT_MS : undefined, externalSignal)
+				: await viaDirect(url, headers, body, DIRECT_TIMEOUT_MS, externalSignal)
 			// 4xx 是模型服务的真实返回（key 无效 / 模型名错误…），换通道也不会变好，直接回传
 			if (r.ok || (r.status >= 400 && r.status < 500)) {
 				preferredRoute = channel
@@ -452,6 +468,9 @@ async function dispatch(cfg, url, headers, body) {
 			last = r
 			failures.push({ channel, status: r.status, text: r.text })
 		} catch (err) {
+			// 用户中止不是「调用失败」：若在这里吞掉并包装成 502，
+			// page-agent 会误判为可重试错误，再多发 2 次请求、更晚才停下
+			if (isUserAbort(externalSignal)) throw err
 			const rec = { ok: false, status: 0, text: String(err?.message || err), error: err, channel }
 			last = rec
 			failures.push({ channel, status: 0, text: rec.text })
@@ -514,6 +533,9 @@ export function createAgentFetch(cfg) {
 		const protocol = cfg.protocol || 'openai-chat'
 		const url = endpointFor(cfg)
 		const headers = authHeaders(cfg)
+		// page-agent 在用户点「停止 / 关闭」时 abort 这个信号，
+		// 必须一路带到真正的请求上，否则点了停止也要等请求跑完才响应
+		const externalSignal = init?.signal
 
 		let openaiBody
 		try {
@@ -527,8 +549,10 @@ export function createAgentFetch(cfg) {
 
 		let upstream
 		try {
-			upstream = await dispatch(cfg, url, headers, targetBody)
+			upstream = await dispatch(cfg, url, headers, targetBody, externalSignal)
 		} catch (err) {
+			// 用户取消：原样抛 AbortError，让 page-agent 判定为「已停止」而非「调用失败」
+			if (isUserAbort(externalSignal) || err?.name === 'AbortError') throw err
 			return errorResponse(
 				`调用模型服务失败：${err?.message || err}（请检查提供方是否可达、API Key 是否有效，或在设置里切换请求通道）`,
 				502
