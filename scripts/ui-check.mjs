@@ -1,11 +1,11 @@
-/** UI 冒烟：悬浮助手展开 / 设置面板 / 保存配置 / 打开站点 */
+/** UI 冒烟：设置面板 / 打开站点 / bridge 注入 / page-agent Panel 出现 */
 const pw = await import(
 	process.env.PLAYWRIGHT_CORE_PATH ||
 		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
 )
 const chromium = pw.default?.chromium ?? pw.chromium
 
-const BASE = process.env.BASE || 'http://localhost:5577'
+const BASE = process.env.BASE || 'http://localhost:3000'
 const SHARE = process.env.SHARECODE || ''
 const KEY = process.env.PA_TEST_KEY || ''
 const TARGET = process.env.TARGET || 'https://example.com'
@@ -24,17 +24,15 @@ await page.goto(entry, { waitUntil: 'load' })
 
 const results = {}
 results.homeVisible = await page.isVisible('#home-guide')
-await page.click('#fab')
-await page.waitForTimeout(400)
-results.chatOpen = await page.evaluate(() => document.getElementById('chat-panel').classList.contains('open'))
+results.statusBadge = (await page.textContent('#status-badge')).trim()
 
-await page.click('#btn-settings-chat')
+await page.click('#btn-settings-top')
 await page.waitForTimeout(300)
 results.settingsVisible = await page.isVisible('#settings-mask')
 
 if (KEY) {
-	await page.fill('#cfg-baseurl', 'https://zenmux.ai/api/v1')
-	await page.fill('#cfg-model', 'deepseek/deepseek-v4-flash')
+	await page.fill('#cfg-baseurl', process.env.PA_BASEURL || 'https://api.deepseek.com/v1')
+	await page.fill('#cfg-model', process.env.PA_MODEL || 'deepseek-chat')
 	await page.fill('#cfg-apikey', KEY)
 	await page.click('#btn-test')
 	await page.waitForFunction(
@@ -49,6 +47,8 @@ if (KEY) {
 	await page.waitForTimeout(300)
 	results.badge = await page.textContent('#status-badge')
 	results.settingsClosed = !(await page.isVisible('#settings-mask'))
+} else {
+	await page.click('#btn-cancel')
 }
 
 await page.fill('#url-input', TARGET)
@@ -64,6 +64,28 @@ await page.waitForFunction(
 	{ timeout: 60_000 }
 )
 results.bridgeReady = true
+
+// page-agent 内置 Panel 应自动出现在 iframe 内
+await page.waitForFunction(
+	() => {
+		try {
+			const d = document.getElementById('page-frame').contentDocument
+			return !!d?.querySelector('#page-agent-runtime_agent-panel')
+		} catch {
+			return false
+		}
+	},
+	{ timeout: 20_000 }
+).catch(() => {})
+results.panelCount = await page.evaluate(() => {
+	try {
+		return document
+			.getElementById('page-frame')
+			.contentDocument.querySelectorAll('#page-agent-runtime_agent-panel').length
+	} catch {
+		return 0
+	}
+})
 results.frameTitle = await page.evaluate(() => {
 	try {
 		return document.getElementById('page-frame').contentDocument?.title

@@ -1,6 +1,6 @@
 /**
  * 浏览器端到端测试
- *   - 真实 Chrome 打开应用 -> 加载目标站点 -> 自然语言驱动 Agent
+ *   - 真实 Chrome 打开应用 -> 加载目标站点 -> 通过 page-agent 内置 Panel 下发自然语言任务
  * 用法：
  *   node scripts/e2e-test.mjs [protocol]
  *   PROTOCOL=openai-chat|openai-responses|anthropic
@@ -11,23 +11,22 @@ const PW_PATH =
 const pw = await import(PW_PATH)
 const chromium = pw.default?.chromium ?? pw.chromium
 
-const BASE = process.env.BASE || 'http://localhost:5577'
+const BASE = process.env.BASE || 'http://localhost:3000'
 /** 部署环境往往需要分享码才能进入，统一附加到所有请求上 */
 const SHARE = process.env.SHARECODE || ''
 const withShare = (path) => {
 	const sep = path.includes('?') ? '&' : '?'
 	return SHARE ? `${path}${sep}sharecode=${SHARE}` : path
 }
-const abs = (path) => (BASE + withShare(path)).replace(/[?&]$/, '')
-const entry = abs('/')
+const entry = BASE + withShare('/')
 const KEY = process.env.PA_TEST_KEY || process.env.ZENMUX_KEY || ''
 const PROTOCOL = process.env.PROTOCOL || process.argv[2] || 'openai-chat'
-const MODEL = process.env.MODEL || 'deepseek/deepseek-v4-flash'
+const MODEL = process.env.MODEL || 'deepseek-chat'
 
 const BASE_URLS = {
-	'openai-chat': 'https://zenmux.ai/api/v1',
-	'openai-responses': 'https://zenmux.ai/api/v1',
-	anthropic: 'https://zenmux.ai/api/anthropic/v1',
+	'openai-chat': process.env.PA_BASEURL || 'https://api.deepseek.com/v1',
+	'openai-responses': process.env.PA_BASEURL || 'https://api.openai.com/v1',
+	anthropic: process.env.PA_BASEURL || 'https://api.anthropic.com/v1',
 }
 
 const CASES = process.env.CASES
@@ -42,7 +41,7 @@ if (!KEY) {
 const browser = await chromium.launch({
 	executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 	headless: true,
-	args: ['--no-sandbox', '--disable-web-security=false'],
+	args: ['--no-sandbox'],
 })
 
 let failed = 0
@@ -89,7 +88,7 @@ for (const [index, c] of CASES.entries()) {
 						baseURL,
 						model,
 						apiKey: key,
-						route: 'proxy',
+						route: 'auto',
 						maxSteps: 25,
 						stepDelay: 0.4,
 						maxTokens: 8192,
@@ -120,7 +119,6 @@ for (const [index, c] of CASES.entries()) {
 		console.log('   ✅ bridge 注入成功')
 
 		// 页面标题（代理后应保留原站标题）
-		const frame = await page.frameElement?.() // noop
 		const title = await page.evaluate(() => {
 			try {
 				return document.getElementById('page-frame').contentDocument?.title
@@ -130,26 +128,48 @@ for (const [index, c] of CASES.entries()) {
 		})
 		console.log(`   ✅ 页面加载成功，标题：${title}`)
 
-		await page.click('#fab')
-		await page.fill('#task-input', c.task)
-		await page.click('#btn-send')
+		// 等 page-agent 内置 Panel 出现，然后在它的输入框里下发任务
+		await page.waitForFunction(
+			() => {
+				try {
+					const d = document.getElementById('page-frame').contentDocument
+					return !!d?.querySelector('#page-agent-runtime_agent-panel')
+				} catch {
+					return false
+				}
+			},
+			{ timeout: 20_000 }
+		)
+		const taskInputSel = '#page-agent-runtime_agent-panel [class*="taskInput"]'
+		const frameEl = await page.waitForSelector(`#page-frame`)
+		const panelFrame = await frameEl.contentFrame()
+		await panelFrame.waitForSelector(taskInputSel, { timeout: 10_000 })
+		await panelFrame.fill(taskInputSel, c.task)
+		await panelFrame.press(taskInputSel, 'Enter')
+		console.log('   ✅ 任务已下发')
 
 		const t0 = Date.now()
-		// 任务启动
-		await page.waitForFunction(() => document.getElementById('btn-stop')?.hidden === false, {
-			timeout: 30_000,
-		})
-		// 任务结束（无论成功失败）
-		await page.waitForFunction(() => document.getElementById('btn-stop')?.hidden === true, {
-			timeout: 240_000,
-			polling: 1000,
-		})
+		// 任务结束：顶部 agent-status 会同步为终态（completed/error/stopped）
+		await page.waitForFunction(
+			() => {
+				const el = document.getElementById('agent-status')
+				if (!el) return false
+				return /任务完成|执行出错|已停止/.test(el.textContent)
+			},
+			{ timeout: 240_000, polling: 1000 }
+		)
 
 		const chatText = await page.evaluate(() => {
-			const nodes = [...document.querySelectorAll('#chat-body .msg, #chat-body .step')]
-			return nodes.map((n) => n.textContent.replace(/\s+/g, ' ').trim()).join('\n')
+			try {
+				const d = document.getElementById('page-frame').contentDocument
+				const nodes = [...d.querySelectorAll('#page-agent-runtime_agent-panel [class*="historyContent"]')]
+				return nodes.map((n) => n.textContent.replace(/\s+/g, ' ').trim()).join('\n')
+			} catch {
+				return '(面板内容不可读)'
+			}
 		})
-		console.log(`   ⏱  用时 ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+		const finalStatus = await page.textContent('#agent-status')
+		console.log(`   ⏱  用时 ${((Date.now() - t0) / 1000).toFixed(1)}s  终态：${finalStatus.trim()}`)
 		console.log('   ── 输出 ──')
 		console.log(
 			chatText
@@ -157,7 +177,7 @@ for (const [index, c] of CASES.entries()) {
 				.map((l) => `      ${l.slice(0, 220)}`)
 				.join('\n')
 		)
-		if (/❌|任务未能完成/.test(chatText)) {
+		if (/执行出错/.test(finalStatus)) {
 			failed++
 			console.log('   ❌ 任务未成功完成')
 		} else {
