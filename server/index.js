@@ -15,6 +15,7 @@ import {
 	UPSTREAM_PROXY,
 } from './proxy.js'
 import { validateTargetUrl } from './security.js'
+import { attachWsProxy } from './wsProxy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PUBLIC_DIR = path.join(__dirname, '..', 'public')
@@ -265,6 +266,9 @@ app.use((err, _req, res, _next) => {
 	if (!res.headersSent) res.status(500).json({ error: err.message })
 })
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
 	console.log(`\n  🚀 万能网页操作 Agent 已启动： http://0.0.0.0:${PORT}\n`)
 })
+
+// WebSocket 走 HTTP Upgrade，Express 路由接不到，必须挂在 http.Server 上
+attachWsProxy(server)

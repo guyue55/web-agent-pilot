@@ -213,28 +213,34 @@
 		window.EventSource = PatchedES
 	}
 
-	// WebSocket 暂不支持服务端代理，显式降级避免页面反复重连
+	// WebSocket：改写到服务端隧道 /__paws/<scheme>/<host>/<path>（握手后按字节透传）
+	const WS_PREFIX = '/__paws/'
+	function toWsProxyUrl(rawUrl) {
+		let abs
+		try {
+			abs = new URL(String(rawUrl), location.href)
+		} catch {
+			return rawUrl
+		}
+		// 已经是代理路径 / 非 ws 协议：原样返回
+		if (abs.pathname.startsWith(WS_PREFIX)) return rawUrl
+		if (abs.protocol !== 'ws:' && abs.protocol !== 'wss:') return rawUrl
+		const targetScheme = abs.protocol === 'wss:' ? 'https' : 'http'
+		// 页面本身是 http，浏览器不允许连 wss 到同主机的明文端口，按页面协议选 ws/wss
+		const localScheme = location.protocol === 'https:' ? 'wss' : 'ws'
+		return `${localScheme}://${location.host}${WS_PREFIX}${targetScheme}/${abs.host}${abs.pathname}${abs.search}`
+	}
+
 	if (window.WebSocket) {
 		const OriginalWS = window.WebSocket
+		// 必须用 class extends：替换原型的写法会丢掉 CONNECTING/OPEN/CLOSING/CLOSED
+		// 这些静态常量，站点用常量判断连接状态时会一直卡在「未连接」
 		class PatchedWS extends OriginalWS {
 			constructor(url, protocols) {
-				console.warn('[pa-bridge] WebSocket 代理暂不支持，已阻止连接：', String(url))
-				try {
-					super('ws://127.0.0.1:1', protocols)
-				} catch {
-					// 返回一个最小可用的假对象，避免调用方崩溃
-					return {
-						readyState: 3,
-						CLOSED: 3,
-						send() {},
-						close() {},
-						addEventListener() {},
-						removeEventListener() {},
-					}
-				}
+				const proxied = toWsProxyUrl(url)
+				if (protocols === undefined) super(proxied)
+				else super(proxied, protocols)
 			}
-			send() {}
-			close() {}
 		}
 		window.WebSocket = PatchedWS
 	}

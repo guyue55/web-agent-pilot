@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebSocket 隧道测试页</title>
+</head>
+<body>
+	<h1>WebSocket 隧道测试</h1>
+	<p>本页会通过本应用的 WS 隧道连接一个本地回显服务，结果写入 <code>window.__wsState</code>。</p>
+	<pre id="out">connecting…</pre>
+	<script>
+		const out = document.getElementById('out')
+		window.__wsState = 'idle'
+		const set = (s) => {
+			window.__wsState = s
+			out.textContent = s
+		}
+		try {
+			const ws = new WebSocket('ws://127.0.0.1:3501/echo')
+			ws.onopen = () => {
+				set('open')
+				ws.send('hello')
+			}
+			ws.onmessage = (e) => set(e.data)
+			ws.onerror = () => set('error')
+			ws.onclose = (e) => {
+				if (window.__wsState === 'idle' || window.__wsState === 'open') set('closed:' + e.code)
+			}
+		} catch (err) {
+			set('throw:' + err.message)
+		}
+	</script>
+</body>
+</html>
