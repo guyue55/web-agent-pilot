@@ -175,22 +175,21 @@
 		return originalFetch(input, init)
 	}
 
+	// 用 class extends 而不是替换原型：普通函数做补丁时，静态成员
+	// （XMLHttpRequest.DONE / WebSocket.OPEN …）不会跟着搬到新构造器上。
+	// 真实站点普遍用 `xhr.readyState === XMLHttpRequest.DONE` 判断完成，
+	// 常量一旦变成 undefined，页面数据就永远加载不出来。
 	const OriginalXHR = window.XMLHttpRequest
-	function PatchedXHR() {
-		const xhr = new OriginalXHR()
-		const originalOpen = xhr.open
-		xhr.open = function (method, url, ...rest) {
+	class PatchedXHR extends OriginalXHR {
+		open(method, url, ...rest) {
 			try {
-				// eslint-disable-next-line no-param-reassign
 				url = rewriteUrl(url)
 			} catch {
 				/* noop */
 			}
-			return originalOpen.call(this, method, url, ...rest)
+			return super.open(method, url, ...rest)
 		}
-		return xhr
 	}
-	PatchedXHR.prototype = OriginalXHR.prototype
 	window.XMLHttpRequest = PatchedXHR
 
 	const originalBeacon = navigator.sendBeacon?.bind(navigator)
@@ -206,38 +205,37 @@
 
 	if (window.EventSource) {
 		const OriginalES = window.EventSource
-		function PatchedES(url, init) {
-			return new OriginalES(rewriteUrl(url), init)
+		class PatchedES extends OriginalES {
+			constructor(url, init) {
+				super(rewriteUrl(url), init)
+			}
 		}
-		PatchedES.prototype = OriginalES.prototype
-		Object.defineProperty(PatchedES, 'CONNECTING', { value: OriginalES.CONNECTING })
-		Object.defineProperty(PatchedES, 'OPEN', { value: OriginalES.OPEN })
-		Object.defineProperty(PatchedES, 'CLOSED', { value: OriginalES.CLOSED })
 		window.EventSource = PatchedES
 	}
 
 	// WebSocket 暂不支持服务端代理，显式降级避免页面反复重连
 	if (window.WebSocket) {
 		const OriginalWS = window.WebSocket
-		function PatchedWS(url, protocols) {
-			try {
+		class PatchedWS extends OriginalWS {
+			constructor(url, protocols) {
 				console.warn('[pa-bridge] WebSocket 代理暂不支持，已阻止连接：', String(url))
-				const fake = new OriginalWS('ws://127.0.0.1:1', protocols)
-				return fake
-			} catch {
-				// 返回一个最小可用的假对象，避免调用方崩溃
-				const fake = {
-					readyState: 3,
-					CLOSED: 3,
-					send() {},
-					close() {},
-					addEventListener() {},
-					removeEventListener() {},
+				try {
+					super('ws://127.0.0.1:1', protocols)
+				} catch {
+					// 返回一个最小可用的假对象，避免调用方崩溃
+					return {
+						readyState: 3,
+						CLOSED: 3,
+						send() {},
+						close() {},
+						addEventListener() {},
+						removeEventListener() {},
+					}
 				}
-				return fake
 			}
+			send() {}
+			close() {}
 		}
-		PatchedWS.prototype = OriginalWS.prototype
 		window.WebSocket = PatchedWS
 	}
 
@@ -443,8 +441,27 @@
 		}
 	}
 
+	// 同一时间只允许一次 Agent 初始化在飞。
+	// ensureAgent 内部有 await（加载脚本 / 动态 import），连续两条 configure 消息
+	// 会并发跑到这里：各自都会通过 `if (state.agent) return` 的检查，
+	// 最终创建两个 Agent，第二个覆盖 state.agent 后第一个成为孤儿 ——
+	// 表现为「两个输入框 + 重复光标 / 元素框 + 多个动画循环」。
+	let agentStarting = null
+
 	async function ensureAgent() {
 		if (state.agent) return state.agent
+		if (agentStarting) return agentStarting
+		agentStarting = (async () => {
+			try {
+				return await createAgent()
+			} finally {
+				agentStarting = null
+			}
+		})()
+		return agentStarting
+	}
+
+	async function createAgent() {
 		if (!state.config) throw new Error('尚未配置大模型，请先在设置面板填写 API 信息')
 		await ensureScriptLoaded()
 		const { createAgentFetch } = await loadAdapter()
