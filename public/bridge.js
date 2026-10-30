@@ -250,8 +250,22 @@
 
 	// ------------------------------------------- 动态插入的节点也要走代理
 	const URLISH_ATTRS = ['src', 'href', 'srcset', 'poster', 'data', 'action', 'formaction']
+
+	// page-agent 自身的 UI（遮罩 SimulatorMask / Panel）都带这两个标记。
+	// 它在运行期间高频增删 DOM（遮罩动画、光标 rAF 循环、元素高亮框），
+	// 若被本文件的代理改写逻辑逐节点扫描，会明显掉帧 → 表现"不够丝滑/生硬"；
+	// 且其资源全是 data URI / 内联样式，本来就不需要代理。故整体跳过。
+	const PA_OWNED_SELECTOR = '[data-page-agent-ignore],[data-browser-use-ignore]'
+	function isPageAgentOwned(node) {
+		if (!node) return false
+		const el = node.nodeType === 1 ? node : node.parentElement
+		if (!el || typeof el.closest !== 'function') return false
+		return el.closest(PA_OWNED_SELECTOR) !== null
+	}
+
 	function normalizeAttributes(node) {
 		if (!node || node.nodeType !== 1 || !node.getAttribute) return
+		if (isPageAgentOwned(node)) return
 		// 图片在极速模式下直接 Neutralize，避免慢 CDN 拖垮整页
 		if (node.tagName === 'IMG' || node.tagName === 'IMAGE') {
 			if (state.fastMode) {
@@ -327,6 +341,8 @@
 			for (const m of mutations) {
 				if (m.type !== 'childList') continue
 				m.addedNodes.forEach((n) => {
+					// page-agent 自身 UI 的高频 DOM 变更直接跳过，避免逐节点扫描拖垮帧率
+					if (isPageAgentOwned(n)) return
 					normalizeAttributes(n)
 					if (n.nodeType === 1 && n.querySelectorAll) {
 						n.querySelectorAll('[src],[href],[srcset],[poster],[action]').forEach(normalizeAttributes)
@@ -388,6 +404,21 @@
 		}
 	}
 
+	// 清理可能残留的 page-agent 遮罩 / 面板节点。
+	// SimulatorMask 是「异步动态 import」创建的：若在 mask 建好之前就 dispose，
+	// 那个迟到的 mask 会成为孤儿永远留在页面上。孤儿遮罩会叠加出
+	// 「多个光标（看起来更大）+ 重复元素框 + 多个 rAF/动画循环 → 卡顿」。
+	// 本函数在新建 Agent 前调用，此时不应存在任何遮罩/面板，存在的即为残留。
+	function cleanupStaleOverlays() {
+		try {
+			document
+				.querySelectorAll('#page-agent-runtime_simulator-mask, #page-agent-runtime_agent-panel')
+				.forEach((el) => el.remove())
+		} catch {
+			/* noop */
+		}
+	}
+
 	async function ensureAgent() {
 		if (state.agent) return state.agent
 		if (!state.config) throw new Error('尚未配置大模型，请先在设置面板填写 API 信息')
@@ -395,6 +426,8 @@
 		const { createAgentFetch } = await loadAdapter()
 
 		disposeAgent()
+		// 清掉上一轮可能残留的孤儿遮罩/面板，避免视觉叠加与动画循环累积
+		cleanupStaleOverlays()
 
 		const cfg = state.config
 		refreshNoProxyHosts()
