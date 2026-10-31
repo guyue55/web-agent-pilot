@@ -1,0 +1,39 @@
+name: CodeQL
+
+# 代码级漏洞扫描（第一方代码）。本项目抓取任意站点、经手凭据，
+# SSRF / 注入面较大，仅靠 dependabot 管依赖漏洞不够，补一层静态分析。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # 每周一 04:27 UTC 跑一次，捕捉依赖/写法变化引入的新问题
+    - cron: '27 4 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: 代码扫描（CodeQL）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 初始化 CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          # JS/TS 统一语言标识
+          languages: javascript-typescript
+          # 在默认安全查询之外加质量查询，覆盖更多注入/逻辑缺陷
+          queries: security-and-quality
+
+      - name: 自动构建
+        uses: github/codeql-action/autobuild@v3
+
+      - name: 执行分析
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
