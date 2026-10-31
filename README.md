@@ -94,7 +94,8 @@ scripts/
   check-nav-loop.mjs 回归：目标站反复自我重定向时能否被拦下且不误伤正常站点
   check-ws.mjs   回归：WebSocket 隧道是否端到端可用
   check-proxy-timeout.mjs 回归：目标站太慢/连不上时的超时、重试与落地页
-  check-storage.mjs 回归：存储按站点隔离（含 clear() 互删、storage 事件、续跑键共享）
+  check-storage.mjs 回归：按站点隔离（含 cookie、clear() 互删、storage 事件、续跑键共享）
+  check-storage-fidelity.mjs 回归：shim 开/关两组对照，确认没把原生存储语义改坏
   check-rebind.mjs 回归：DNS rebinding 打不穿 HTTP / WS（自带替身 DNS 与内网受害者）
   measure-panel-css.mjs 测量：目标站 CSS 对 Panel 的污染（与干净页逐属性对比）
   fixtures/      测试夹具：敌意样式页、WebSocket 测试页、回显服务、静态服务
@@ -184,6 +185,7 @@ npm run check:ws        # WS 隧道是否端到端可用（含静态常量完整
 npm run check:nav-loop  # 知乎类「自我重定向」站点被拦下，正常站不误伤
 
 npm run check:storage   # 按站点隔离：LS/SS/IDB/cookie 不串味、clear() 不互删、续跑键仍共享
+npm run check:fidelity  # 语义保真：shim 开/关两组跑同一段操作，确认没把原生行为改坏
 npm run check:rebind    # DNS rebinding 打不穿 HTTP 与 WS 两条路径（脚本自带替身 DNS）
 ```
 

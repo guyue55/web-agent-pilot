@@ -78,8 +78,13 @@
 	}
 
 	function makeStorage(raw) {
+		// 页面给原型方法赋值（如 localStorage.setItem = wrapper 做插桩）时，原生行为是
+		// 加一个自有属性把它遮蔽住，而不是写进存储；这里用一张表复刻，否则会凭空多出
+		// 一个名叫 "setItem" 的存储项，而页面的包装逻辑永远不生效（实测差异）。
+		const shadows = new Map()
 		const proxy = new Proxy(Object.create(storageProto), {
 			get(_target, prop) {
+				if (shadows.has(prop)) return shadows.get(prop)
 				switch (prop) {
 					case 'length':
 						return visibleKeys(raw).length
@@ -121,31 +126,57 @@
 			},
 			set(_target, prop, value) {
 				if (typeof prop === 'symbol') return true
+				// 原生的 length 是只读访问器，赋值静默无效；照抄，别造出幽灵键
+				if (prop === 'length') return true
+				if (prop in storageProto) {
+					shadows.set(prop, value)
+					return true
+				}
 				raw.setItem(physKey(prop), String(value))
 				return true
 			},
 			has(_target, prop) {
 				if (typeof prop === 'symbol') return false
+				if (shadows.has(prop)) return true
 				if (prop in storageProto) return true
 				return raw.getItem(physKey(prop)) !== null
 			},
 			deleteProperty(_target, prop) {
 				if (typeof prop === 'symbol') return true
+				if (shadows.has(prop)) {
+					shadows.delete(prop)
+					return true
+				}
 				raw.removeItem(physKey(prop))
 				return true
 			},
 			ownKeys() {
-				return visibleKeys(raw).map((k) => logicKey(k))
+				// 自有属性（被页面遮蔽的方法）也算，原生 Object.keys 同样能看到它们。
+				// 'length' 是接口属性：原生不把它当同名存储项枚举，这里照做。
+				return [
+					...shadows.keys(),
+					...visibleKeys(raw).map((k) => logicKey(k)).filter((k) => k !== 'length'),
+				]
 			},
 			getOwnPropertyDescriptor(_target, prop) {
 				if (typeof prop === 'symbol') return undefined
-				if (prop in storageProto) return undefined
-				const v = raw.getItem(physKey(prop))
-				if (v === null) return undefined
-				return { value: v, writable: true, enumerable: true, configurable: true }
+				if (shadows.has(prop)) {
+					return { value: shadows.get(prop), writable: true, enumerable: true, configurable: true }
+				}
+				// 方法名（getItem 等）与同名存储项并存时，原生会把该项列出来
+				if (prop !== 'length') {
+					const v = raw.getItem(physKey(prop))
+					if (v !== null) return { value: v, writable: true, enumerable: true, configurable: true }
+				}
+				return undefined
 			},
 			defineProperty(_target, prop, desc) {
 				if (typeof prop === 'symbol' || !('value' in desc)) return true
+				if (prop === 'length') return true
+				if (prop in storageProto) {
+					shadows.set(prop, desc.value)
+					return true
+				}
 				raw.setItem(physKey(prop), String(desc.value))
 				return true
 			},

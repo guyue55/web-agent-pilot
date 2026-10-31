@@ -31,6 +31,7 @@
     "check:ws": "node scripts/check-ws.mjs",
     "check:proxy": "node scripts/check-proxy-timeout.mjs",
     "check:storage": "node scripts/check-storage.mjs",
+    "check:fidelity": "node scripts/check-storage-fidelity.mjs",
     "check:rebind": "node scripts/check-rebind.mjs",
     "measure:css": "node scripts/measure-panel-css.mjs"
   },
