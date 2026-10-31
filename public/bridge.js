@@ -616,8 +616,7 @@
 		}
 	}
 
-	// 同一时间只允许一次 Agent 初始化在飞。
-	// ensureAgent 内部有 await（加载脚本 / 动态 import），连续两条 configure 消息
+	// 同一时间只允许一次 Agent 初始化在飞。	// ensureAgent 内部有 await（加载脚本 / 动态 import），连续两条 configure 消息
 	// 会并发跑到这里：各自都会通过 `if (state.agent) return` 的检查，
 	// 最终创建两个 Agent，第二个覆盖 state.agent 后第一个成为孤儿 ——
 	// 表现为「两个输入框 + 重复光标 / 元素框 + 多个动画循环」。
@@ -639,6 +638,46 @@
 		})()
 		return agentStarting
 	}
+
+	/**
+	 * 工具名别名的兜底表。
+	 *
+	 * page-agent 用 `{ <工具名>: <参数> }` 这种单键对象表达动作，键名必须与注册表
+	 * 完全一致，否则 validateAction 直接抛 `Unknown action "xxx"`，整轮任务失败。
+	 * 模型时不时会把 execute_javascript 简写成 script、把 click_element_by_index
+	 * 写成 index（线上实测连续重试两次仍是同一个错名，重试完全没能自愈）。
+	 *
+	 * 这里只映射「指向明确、不会歧义」的写法，schema 与实现都复用真工具对象，
+	 * 不扩大能力面：模型能做原来就能做的事，只是名字写错时不至于整轮报废。
+	 */
+	const TOOL_ALIASES = {
+		script: 'execute_javascript',
+		javascript: 'execute_javascript',
+		execute_script: 'execute_javascript',
+		js: 'execute_javascript',
+		index: 'click_element_by_index',
+		click_element: 'click_element_by_index',
+		click_by_index: 'click_element_by_index',
+	}
+
+	function applyToolAliases(agent) {
+		const tools = agent?.tools
+		if (!tools || typeof tools.get !== 'function' || typeof tools.set !== 'function') return []
+		const added = []
+		for (const [alias, real] of Object.entries(TOOL_ALIASES)) {
+			// 真工具不存在（比如脚本执行工具被关掉）时不要凭空造一个出来
+			if (tools.has(alias)) continue
+			const tool = tools.get(real)
+			if (!tool) continue
+			tools.set(alias, tool)
+			added.push(alias)
+		}
+		return added
+	}
+
+	// 供回归脚本使用（与 window.__PAStorageShim 同一约定：只暴露断言需要的最小面）
+	window.__PAToolAliases = TOOL_ALIASES
+	window.__PAAugmentTools = applyToolAliases
 
 	async function createAgent() {
 		if (!state.config) throw new Error('尚未配置大模型，请先在设置面板填写 API 信息')
@@ -669,6 +708,13 @@
 			// 允许 Agent 在页面内执行 JS（发送回车、绕过只有 JS 才能触发的交互）
 			experimentalScriptExecutionTool: cfg.scriptTool !== false,
 		})
+
+		// 工具名写错时给出一次纠正机会（见 TOOL_ALIASES 的说明）
+		try {
+			applyToolAliases(agent)
+		} catch (err) {
+			console.warn('[pa-bridge] 注册工具别名失败', err)
+		}
 
 		// 采用 page-agent 自带的 Panel 作为聊天 UI（直接渲染在 iframe 内的目标页上），
 		// 它原生支持单输入框、Enter 发送、实时 thinking/executing 状态与 ask_user 问答。
