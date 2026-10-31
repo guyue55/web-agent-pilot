@@ -235,7 +235,14 @@ export function rewriteHtml(html, base, bridgeScript = '/_app/bridge.js', share 
 	})
 
 	// <base href> 指向代理路径，未改写的相对 URL 也由浏览器自动解析到代理
+	// storage shim 必须排在所有页面脚本之前：代理页共用同一个源，
+	// 不先接管 localStorage / sessionStorage，不同站点的数据就会互相串味。
+	const storageShim = appendQuery('/_app/storage-shim.js', {
+		o: base.origin,
+		[SHARE_PARAM]: share,
+	})
 	const injection =
+		`<script src="${escapeHtmlAttr(storageShim)}"></script>` +
 		`<base href="${escapeHtmlAttr(encodeProxyUrl(base))}">` +
 		`<script src="${escapeHtmlAttr(appendQuery(bridgeScript, { [SHARE_PARAM]: share }))}"></script>`
 
