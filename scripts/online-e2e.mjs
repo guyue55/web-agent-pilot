@@ -110,6 +110,28 @@ ok(!iso.bKeys.includes('token'), 'B 站 key 列表不含 A 站键', JSON.stringi
 ok(iso.aBack === 'AAA-of-example', 'B 站 clear() 不影响 A 站数据', JSON.stringify(iso.aBack))
 ok(iso.aTheme === null, 'A 站读不到 B 站写的键', JSON.stringify(iso.aTheme))
 
+// 2b) cookie 隔离：页面 JS 写的 cookie 不能跨站，也不能覆盖别站
+const cookieIso = await page.evaluate(async () => {
+	const load = async (host) => {
+		const f = document.getElementById('pa-probe-' + host)
+		if (!f) return null
+		return f.contentWindow
+	}
+	const a = await load('example.com')
+	const b = await load('example.net')
+	a.document.cookie = 'ctoken=COOKIE-A; path=/; max-age=600'
+	const aRead = a.document.cookie
+	const bRead = b.document.cookie
+	b.document.cookie = 'ctoken=COOKIE-B; path=/'
+	const bAfter = b.document.cookie
+	const aAfter = a.document.cookie
+	return { aRead, bRead, bAfter, aAfter }
+})
+ok(/COOKIE-A/.test(cookieIso.aRead), 'A 站写入 cookie 后能读回', JSON.stringify(cookieIso.aRead))
+ok(cookieIso.bRead === '', 'B 站读不到 A 站的 cookie', JSON.stringify(cookieIso.bRead))
+ok(/COOKIE-B/.test(cookieIso.bAfter) && !/COOKIE-A/.test(cookieIso.bAfter), 'B 站同名 cookie 不覆盖 A 站', JSON.stringify(cookieIso.bAfter))
+ok(/COOKIE-A/.test(cookieIso.aAfter) && !/COOKIE-B/.test(cookieIso.aAfter), '回到 A 站仍是自己的 cookie', JSON.stringify(cookieIso.aAfter))
+
 // 3) 宿主自身存储仍正常（没被 shim 误伤）
 const hostStore = await page.evaluate(() => ({
 	settings: localStorage.getItem('pa.agent.settings.v1'),

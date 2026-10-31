@@ -159,6 +159,55 @@ console.log('\n===== D) 主应用自己的键仍然跨站共享 =====')
 	await ctx.close()
 }
 
+console.log('\n===== E) document.cookie 按站点隔离 =====')
+{
+	// 被代理页 JS 写的 cookie 落在代理源上：不隔离的话 A 站的 token B 站直接能读。
+	const ctx = await browser.newContext()
+	const page = await ctx.newPage()
+	await page.goto(`${BASE}/__pa/https/example.com/`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+	const aSet = await page.evaluate(() => {
+		document.cookie = 'token=AAA-of-A; path=/; max-age=600'
+		return document.cookie
+	})
+	ok(/token=AAA-of-A/.test(aSet), 'A 站写入后能读回自己的 cookie', JSON.stringify(aSet))
+
+	await page.goto(`${BASE}/__pa/https/example.net/`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+	const bSees = await page.evaluate(() => document.cookie)
+	ok(bSees === '', 'B 站读不到 A 站的 cookie', JSON.stringify(bSees))
+
+	const bSet = await page.evaluate(() => {
+		document.cookie = 'token=BBB-of-B; path=/'
+		return document.cookie
+	})
+	ok(/BBB-of-B/.test(bSet) && !/AAA-of-A/.test(bSet), 'B 站同名 cookie 不覆盖 A 站', JSON.stringify(bSet))
+
+	await page.goto(`${BASE}/__pa/https/example.com/`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+	const aBack = await page.evaluate(() => document.cookie)
+	ok(/AAA-of-A/.test(aBack) && !/BBB-of-B/.test(aBack), '回到 A 站仍是自己的 cookie', JSON.stringify(aBack))
+
+	// Cookie Store API（Chrome 有）
+	const hasCS = await page.evaluate(() => typeof window.cookieStore === 'object' && !!window.cookieStore)
+	if (hasCS) {
+		const csSame = await page.evaluate(async () => {
+			await cookieStore.set({ name: 'cs', value: 'CS-A' })
+			const g = await cookieStore.get('cs')
+			return g && g.value
+		})
+		ok(csSame === 'CS-A', 'Cookie Store: 同站可写可读', JSON.stringify(csSame))
+		await page.goto(`${BASE}/__pa/https/example.net/`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+		const csCross = await page.evaluate(async () => {
+			const g = await cookieStore.get('cs')
+			const all = (await cookieStore.getAll()).map((c) => c.name)
+			return { got: g, all }
+		})
+		// B 站自己也写过 token，所以只断言「拿不到 A 站的 cs」，而不是「列表为空」
+		ok(csCross.got === null && !csCross.all.includes('cs'), 'Cookie Store: 拿不到别站的 cookie', JSON.stringify(csCross))
+	} else {
+		console.log('  ⏭️  Cookie Store API 不可用，跳过该两项')
+	}
+	await ctx.close()
+}
+
 await browser.close()
 console.log(`\n结果：${pass} 项通过，${fail} 项失败`)
 process.exit(fail === 0 ? 0 : 1)

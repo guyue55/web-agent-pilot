@@ -9,11 +9,14 @@
  * 做法：给 key 加 `${目标站 origin}$` 前缀，页面看到的是不带前缀的逻辑 key。
  *  - getItem / setItem / removeItem / clear / key / length / 属性式访问（storage.foo）全部走包装
  *  - StorageEvent 只把「本站的」事件交给页面，并把 key 还原成逻辑 key
+ *  - document.cookie 同理改名隔离：被代理页 JS 写的 cookie 落在代理源上，
+ *    不加前缀的话 A 站写的 token B 站能直接读到（实测）
  *  - 主应用自己的键（pa.pendingTask / pa.navLoop）例外：它们要跨站共享，
  *    否则「页面跳转后接着跑」会断（bridge 依赖这个语义）
  *
- * 目标站 origin 由注入方通过查询参数 `?o=` 带进来 —— bridge 在页面里拿到的
- * location.origin 是代理的源，没法自己推出目标站。
+ * 目标站 origin 由注入方通过 `data-pa-o` 属性带进来（兼容旧的 ?o=，并以
+ * location.pathname 反推兜底）—— bridge 在页面里拿到的 location.origin
+ * 是代理的源，没法自己推出目标站。
  */
 ;(function () {
 	'use strict'
@@ -102,7 +105,12 @@
 					default:
 						break
 				}
-				if (typeof prop === 'symbol') return undefined
+				if (typeof prop === 'symbol') {
+					// 符号属性走原型：否则 Object.prototype.toString.call(localStorage)
+					// 会从 [object Storage] 变成 [object Object]（实测差异）
+					const sv = storageProto[prop]
+					return typeof sv === 'function' ? sv.bind(proxy) : sv
+				}
 				// 属性式访问：localStorage.foo / localStorage.foo = 1
 				if (prop in storageProto) {
 					const v = storageProto[prop]
@@ -156,6 +164,104 @@
 		return
 	}
 	// 覆盖失败时保持原生行为（不抛错、不影响页面）
+
+	// ------------------------------------------------------------ document.cookie
+	// 浏览器按「源」存 cookie，而所有被代理站点共用同一个源：
+	// A 站 JS 写下的 cookie，B 站的 JS 能直接读到（实测），同名还会互相覆盖。
+	// 做法与 Storage 一致 —— 给 cookie 名加前缀，读写时再摘掉。
+	// 这些 cookie 只存在于浏览器侧；发往目标站的 Cookie 头由服务端 CookieJar 生成
+	// （server/cookieJar.js），所以加前缀不会影响目标站的登录态。
+	const originTag = (() => {
+		try {
+			return btoa(targetOrigin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+		} catch {
+			return 'x'
+		}
+	})()
+	const COOKIE_PREFIX = `pa_${originTag}_`
+	const splitCookie = (s) => String(s || '').split(';').map((x) => x.trim()).filter(Boolean)
+
+	try {
+		const cookieDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')
+		if (cookieDesc && cookieDesc.get && cookieDesc.set) {
+			Object.defineProperty(Document.prototype, 'cookie', {
+				configurable: true,
+				get() {
+					const raw = cookieDesc.get.call(this)
+					if (!raw) return ''
+					const out = []
+					for (const pair of splitCookie(raw)) {
+						const eq = pair.indexOf('=')
+						const name = eq === -1 ? pair : pair.slice(0, eq)
+						if (!name.startsWith(COOKIE_PREFIX)) continue
+						out.push(name.slice(COOKIE_PREFIX.length) + (eq === -1 ? '' : pair.slice(eq)))
+					}
+					return out.join('; ')
+				},
+				set(value) {
+					const parts = splitCookie(String(value))
+					if (!parts.length) return
+					const head = parts.shift()
+					const eq = head.indexOf('=')
+					const name = (eq === -1 ? head : head.slice(0, eq)).trim()
+					if (!name) return
+					const attrs = []
+					for (const a of parts) {
+						// domain 在代理下没有意义，还可能让浏览器拒写整条 cookie
+						if (a.split('=')[0].trim().toLowerCase() === 'domain') continue
+						attrs.push(a)
+					}
+					const renamed = COOKIE_PREFIX + name + (eq === -1 ? '' : head.slice(eq))
+					cookieDesc.set.call(this, renamed + (attrs.length ? '; ' + attrs.join('; ') : ''))
+				},
+			})
+		}
+	} catch {
+		// 隔离失败不影响页面：退回浏览器原生行为
+	}
+
+	// Cookie Store API（Chrome 有）：同一套前缀规则，避免被绕开
+	try {
+		const cs = window.cookieStore
+		if (cs && typeof cs.get === 'function' && !cs.__paPatched) {
+			const strip = (o) => (o && typeof o.name === 'string' && o.name.startsWith(COOKIE_PREFIX)
+				? { ...o, name: o.name.slice(COOKIE_PREFIX.length) }
+				: o)
+			const nameOf = (arg) => (typeof arg === 'string' ? arg : arg && typeof arg.name === 'string' ? arg.name : null)
+			const wrapQuery = (arg) => {
+				const n = nameOf(arg)
+				if (n === null) return typeof arg === 'object' ? arg : [arg]
+				return typeof arg === 'string' ? COOKIE_PREFIX + n : { ...arg, name: COOKIE_PREFIX + n }
+			}
+			const origGet = cs.get.bind(cs)
+			const origGetAll = cs.getAll.bind(cs)
+			const origSet = cs.set.bind(cs)
+			const origDelete = cs.delete.bind(cs)
+			// 只交出本站的条目：getAll() 不带参数会返回同一个源下的**全部** cookie，
+			// 不过滤就等于把别站的 cookie（连名带值）直接交给页面（实测）。
+			const mineOnly = (list) => list.filter((c) => c && typeof c.name === 'string' && c.name.startsWith(COOKIE_PREFIX)).map(strip)
+			const mineOrNull = (c) => (c && typeof c.name === 'string' && c.name.startsWith(COOKIE_PREFIX) ? strip(c) : null)
+			Object.defineProperties(cs, {
+				get: { configurable: true, writable: true, value: (arg) => origGet(wrapQuery(arg)).then(mineOrNull) },
+				getAll: {
+					configurable: true,
+					writable: true,
+					value: (arg) => (arg === undefined ? origGetAll() : origGetAll(wrapQuery(arg))).then(mineOnly),
+				},
+				set: {
+					configurable: true,
+					writable: true,
+					value: (a, b) => (typeof a === 'string'
+						? origSet(COOKIE_PREFIX + a, b)
+						: origSet({ ...a, name: COOKIE_PREFIX + String(a && a.name) })),
+				},
+				delete: { configurable: true, writable: true, value: (arg) => origDelete(wrapQuery(arg)) },
+				__paPatched: { value: true, configurable: true },
+			})
+		}
+	} catch {
+		/* Cookie Store API 不可用就算了，document.cookie 已覆盖绝大多数场景 */
+	}
 
 	// ------------------------------------------------------------ IndexedDB
 	// 同一个源下 IndexedDB 也是共享的，A 站建的库 B 站能直接打开（实测读到了 A 的数据）。

@@ -79,7 +79,7 @@ public/
   js/app.js       设置面板、地址栏、与 iframe 通信
   js/llm-adapter.js  三种协议的请求 / 响应互转 + 连通性自检
   bridge.js       注入到被代理页面内部：反 frame 拦截、网络请求回流、驱动 PageAgent
-  storage-shim.js 注入到页面最前面：localStorage / sessionStorage / IndexedDB 按站点隔离
+  storage-shim.js 注入到页面最前面：localStorage / sessionStorage / IndexedDB / document.cookie 按站点隔离
   vendor/         PageAgent IIFE 包（本地自托管，不依赖外部 CDN）
 scripts/
   smoke-test.mjs  多站点代理冒烟测试
@@ -109,7 +109,8 @@ scripts/
 - **导航兜底同步**：目标站 JS 触发的同源导航（如 `location.href='/s?wd=x'`）由兜底路由 307 重定向回代理路径 —— iframe 地址栏持续同步、Referer 始终可还原；子资源请求（fetch / XHR）则直接转发，不破坏调用方。
 - **反 framebusting**：iframe `sandbox` 不授予 `allow-top-navigation`，并在 bridge 里把 `window.top`/`parent` 重定向到自身，`<a target=_blank|_top>` 统一改为 `_self`；转发时同时剥离 `Sec-Fetch-Dest`，避免目标站判定「被嵌在 iframe 里」而降级。
 - **登录态**：按浏览器 cookie（`pa_sid`）在服务端各自维护 CookieJar，避免目标站 Cookie 的 Domain/Path 冲突，也不会泄漏给浏览器。
-- **存储按站点隔离**：所有代理页都落在同一个源，浏览器只按源隔离存储 —— 实测 A 站写的 `localStorage` 会被 B 站读到，B 站一次 `clear()` 还会把 A 站的数据抹掉，IndexedDB 同理。`/_app/storage-shim.js` 在页面第一个脚本位置接管 `localStorage` / `sessionStorage`（key 加 `${目标站 origin}$` 前缀）与 `indexedDB.open/deleteDatabase/databases`（库名加前缀），`length` / `key()` / `Object.keys` / `clear()` / 属性式访问 / `storage` 事件全部按本站过滤。主应用自己的键（`pa.pendingTask`、`pa.navLoop`）刻意**不加**前缀，保留跨站共享语义，否则「跳转后接着跑」会断。注意这是**正确性**层面的隔离，不是安全边界（同源文档仍可拿到原始存储）。
+- **页面 JS 写的 cookie 也按站点隔离**：目标站脚本用 `document.cookie` 写下的 cookie 会落进代理源（所有站共用），不加处理时 A 站写的 token B 站能直接读到、同名还会互相覆盖（实测）。shim 给 cookie 名加 `pa_<目标站 origin base64>_` 前缀，`document.cookie` 与 Cookie Store API（`cookieStore.get/getAll/set/delete`）的读写都按前缀拆装；`domain` 属性会被丢弃（代理源下无意义，还会让浏览器整条拒写），`path` / `max-age` / `expires` / `SameSite` 等照常生效。这些 cookie 只存在于浏览器侧，发往目标站的 `Cookie` 头始终来自服务端 CookieJar，因此不影响目标站登录态。
+- **存储按站点隔离**：所有代理页都落在同一个源，浏览器只按源隔离存储 —— 实测 A 站写的 `localStorage` 会被 B 站读到，B 站一次 `clear()` 还会把 A 站的数据抹掉，IndexedDB 同理。`/_app/storage-shim.js` 在页面第一个脚本位置接管 `localStorage` / `sessionStorage`（key 加 `${目标站 origin}$` 前缀）与 `indexedDB.open/deleteDatabase/databases`（库名加前缀），`length` / `key()` / `Object.keys` / `clear()` / 属性式访问 / `storage` 事件全部按本站过滤。主应用自己的键（`pa.pendingTask`、`pa.navLoop`）刻意**不加**前缀，保留跨站共享语义，否则「跳转后接着跑」会断。注意这是**正确性**层面的隔离，不是安全边界（同源文档仍可拿到原始存储 / 原始 cookie）。
 - **SSRF 防护（双路由全覆盖 + 建连时校验）**：代理路由与 LLM 转发路由均只允许 http(s)，解析 DNS 后校验目标 IP 不属于私有 / 保留网段；兜底路由拒绝跨站（`Sec-Fetch-Site: cross-site`）请求，避免被第三方站点当作「以用户身份请求目标站」的中继。**关键是建连那一刻再校验一次**：预检解析与 `undici` / `net.connect` 真正建连时的解析是两次独立查询，只信预检等于给 DNS rebinding 留门（实测域名第一次答公网、第二次答 `127.0.0.1` 就能读出内网数据），因此 HTTP 走 `Agent.connect.lookup`、WS 走 `net/tls.connect({ lookup })`，统一由 `security.safeLookup` 校验实际要连的 IP，且被拦截的请求**不会**再回退到出口代理重试。
 - **响应头清洗**：除 `X-Frame-Options` / CSP / HSTS / COOP / COEP / CORP / `clear-site-data` 外，也删掉 `alt-svc` —— 否则目标站的「支持 HTTP/3」声明会指向我们的源（`h3=":443"`），语义错位。
 - **Agent 单实例**：bridge 对并发到达的配置消息做初始化去重，任何时刻最多一个 Agent / 一套遮罩，避免「双输入框、重复光标、多个动画循环」。
@@ -124,7 +125,7 @@ scripts/
 
 ## 已知限制
 
-- **API Key 存于 localStorage**：被代理页面的 JS 与主应用同源，理论上可读取它。请只在对该站点有基本信任的前提下使用本工具；介意的话可为每次会话使用独立的、低额度的 Key。存储隔离只解决「不同站点之间互相串数据」，**不改变**这一点 —— 页面仍可用 `srcdoc` 之类的同源文档拿到未加前缀的原始存储（实测可读出）。
+- **API Key 存于 localStorage**：被代理页面的 JS 与主应用同源，理论上可读取它。请只在对该站点有基本信任的前提下使用本工具；介意的话可为每次会话使用独立的、低额度的 Key。存储与 cookie 隔离只解决「不同站点之间互相串数据」，**不改变**这一点 —— 页面仍可用 `src` 为空的同源 iframe / `srcdoc` 拿到未加前缀的原始存储和 cookie（实测可读出）。
 
 - 服务端抓取目标是「无浏览器」的 HTTP 请求，因此 Cloudflare 五秒盾、人机验证码、**浏览器指纹校验**类站点（如 stackoverflow.com）无法通过；这不是本项目能解决的问题，需要真实浏览器方案。
 - **会校验域名的站点**：少数站点发现 `location.hostname` 不是自己时会在页面里反复自我跳转（实测知乎 `/signin`）。这类行为在客户端，代理层无法修正；已做「导航死循环保护」，到阈值后断开并提示改用新标签页打开。
@@ -182,7 +183,7 @@ npm run mock:ws         # 3501：WebSocket 回显
 npm run check:ws        # WS 隧道是否端到端可用（含静态常量完整性）
 npm run check:nav-loop  # 知乎类「自我重定向」站点被拦下，正常站不误伤
 
-npm run check:storage   # 存储按站点隔离：LS/SS/IDB 不串味、clear() 不互删、续跑键仍共享
+npm run check:storage   # 按站点隔离：LS/SS/IDB/cookie 不串味、clear() 不互删、续跑键仍共享
 npm run check:rebind    # DNS rebinding 打不穿 HTTP 与 WS 两条路径（脚本自带替身 DNS）
 ```
 
