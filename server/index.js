@@ -183,9 +183,8 @@ app.all(`${PROXY_PREFIX}*`, async (req, res) => {
 })
 
 
-// codeql[js/missing-rate-limiting] 仅提供静态首页与本地开发使用，非高成本未鉴权操作，无需限速
 app.get(['/', '/index.html'], (_req, res) => {
-	res.sendFile(path.join(PUBLIC_DIR, 'index.html'))
+	res.sendFile(path.join(PUBLIC_DIR, 'index.html')) // codeql[js/missing-rate-limiting] 仅提供静态首页，非高成本未鉴权操作，无需限速
 })
 
 // 本站自有静态资源统一挂在 /_app 下，避免与目标站点的相对路径冲突
