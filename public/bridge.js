@@ -756,6 +756,15 @@
 
 	// ---------------------------------------------------------- 消息监听
 	window.addEventListener('message', async (event) => {
+		// 只认宿主（真正的父窗口）发来的指令。
+		// 只校验 origin + source 标记是不够的：目标页脚本自己 window.postMessage 一条
+		// {source:'pa-host'} 就能把 configure 塞进来（实测宿主会收到 configured）。
+		// 加上 event.source 校验后，iframe 场景（生产路径）伪造立即失效。
+		//
+		// 顶层打开代理页时 REAL_PARENT === window，这条校验恒真 —— 但此时没有宿主，
+		// 页面「自己配置自己」拿不到用户的模型配置（宿主页面的 key 在另一个文档里），
+		// 不会多出任何能力，因此不为此再加一层会让真实宿主失效的拦截。
+		if (event.source !== REAL_PARENT) return
 		if (event.origin !== window.location.origin) return
 		const data = event.data
 		if (!data || data.source !== 'pa-host') return
