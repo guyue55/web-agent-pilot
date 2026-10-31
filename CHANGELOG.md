@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-暂无。
+### 改进
+
+- **Release 流程闭环**：打 tag 现在除构建推送 GHCR 镜像外，还会在镜像健康检查通过后自动创建 GitHub Release；说明优先取 CHANGELOG 对应版本段落，找不到则退回 GitHub 自动生成。
 
 ## [1.0.0] - 2026-10-31
 
