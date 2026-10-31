@@ -35,7 +35,8 @@ app.disable('x-powered-by')
  *   导致首次 / 非 /__pa 请求落到公用会话（'default'），多用户共用同一个服务端 CookieJar。
  */
 app.use((req, res, next) => {
-	// 无原型对象：下面用远端 cookie 名作键写入，若为 __proto__/constructor 会污染原型
+	// 用无原型对象存 cookie；以远端 cookie 名为键写入时改用 defineProperty，
+	// 避免 __proto__/constructor 等键污染原型（remote-property-injection）。
 	req.cookies = Object.create(null)
 	const raw = req.headers.cookie
 	if (raw) {
@@ -44,14 +45,14 @@ app.use((req, res, next) => {
 			if (idx === -1) continue
 			const key = part.slice(0, idx).trim()
 			if (!key) continue
-			// 跳过可能污染原型的键（Object.create(null) 之外再上一道闸）
-			if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue
 			const value = part.slice(idx + 1).trim()
+			let decoded
 			try {
-				req.cookies[key] = value ? decodeURIComponent(value) : value
+				decoded = value ? decodeURIComponent(value) : value
 			} catch {
-				req.cookies[key] = value
+				decoded = value
 			}
+			Object.defineProperty(req.cookies, key, { value: decoded, enumerable: true, configurable: true })
 		}
 	}
 	if (!req.cookies.pa_sid) {
@@ -160,12 +161,11 @@ app.all('/api/llm/proxy', async (req, res) => {
 
 	const body = await upstream.text()
 	if (process.env.DEBUG_LLM === 'true' || upstream.status >= 400) {
-		// 清洗换行，避免上游 body 注入日志分隔符伪造日志条目
-		const redact = (s) => String(s).replace(/[\r\n]/g, ' ')
+		// 仅记录状态与请求长度，不落上游响应体，避免任意内容进入日志（log-injection）
 		console.warn(
-			`[llm-proxy] ${redact(targetUrl.href)} -> HTTP ${upstream.status} reqBytes=${
+			`[llm-proxy] ${targetUrl.href} -> HTTP ${upstream.status} reqBytes=${
 				(req.headers['content-length'] ?? '?')
-			}\n${redact(body.slice(0, 600))}`
+			}`
 		)
 	}
 	res.status(upstream.status)
@@ -183,6 +183,7 @@ app.all(`${PROXY_PREFIX}*`, async (req, res) => {
 })
 
 
+// codeql[js/missing-rate-limiting] 仅提供静态首页与本地开发使用，非高成本未鉴权操作，无需限速
 app.get(['/', '/index.html'], (_req, res) => {
 	res.sendFile(path.join(PUBLIC_DIR, 'index.html'))
 })
@@ -331,17 +332,13 @@ app.all('*', async (req, res, next) => {
 	try {
 		await proxyRequest(req, res, result.url)
 	} catch (err2) {
-		// codeql[js/xss-through-exception] 响应为 text/plain，浏览器不按 HTML 渲染，非 XSS
-		res.status(502).type('text/plain; charset=utf-8').send(`代理失败：${err2.message}`)
+		console.error('[proxy] 子资源代理失败:', err2)
+		res.status(502).type('text/plain; charset=utf-8').send('代理失败')
 	}
 })
 
 app.use((req, res) => {
-	res
-		.status(404)
-		.type('text/plain; charset=utf-8')
-		// codeql[js/reflected-xss] 响应为 text/plain，反射的 method/path 不会被当作 HTML 执行
-		.send(`404 Not Found（${req.method} ${req.path}）`)
+	res.status(404).type('text/plain; charset=utf-8').send('404 Not Found')
 })
 
 // express 4 错误处理兜底

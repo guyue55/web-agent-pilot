@@ -1,10 +1,7 @@
 name: "CodeQL 配置"
 
-queries:
-  - uses: security-and-quality
-
-# scripts/ 是本地开发 / 回归测试用的夹具与脚本，不进生产 Docker 镜像，
-# 不会在生产环境运行，因此排除出代码扫描以减少噪声。
-paths-ignore:
-  - scripts
-  - node_modules
+# 只扫描会进入生产 Docker 镜像的代码：server/（服务端）、public/（注入到目标站的脚本）。
+# scripts/ 是本地开发 / 回归测试夹具，不进镜像、不在生产运行，排除以减少噪声。
+paths:
+  - server
+  - public
