@@ -10,9 +10,43 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.FIXTURE_PORT || 3500)
 
+/** 每个路径被请求过几次：用来做「第一次很慢、重试就快」的可控抖动 */
+const hits = new Map()
+const send = (res, delay, body) => {
+	setTimeout(() => {
+		if (res.writableEnded || res.destroyed) return
+		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+		res.end(body)
+	}, delay)
+}
+
 http
 	.createServer((req, res) => {
-		const url = decodeURIComponent((req.url || '/').split('?')[0])
+		const u = new URL(req.url || '/', `http://127.0.0.1:${PORT}`)
+		const url = decodeURIComponent(u.pathname)
+
+		// ---- 供「代理超时/重试」回归使用的动态站点 ----
+		if (url === '/fast') {
+			send(res, 0, '<!doctype html><title>fast</title><p id="ok">fast-ok</p>')
+			return
+		}
+		if (url === '/slow-once') {
+			// 同一 k 的第一次请求拖 ms 毫秒（把响应窗口拖到超时之外），之后立刻返回。
+			// 用 k 隔离轮次：否则跑第二遍时计数已经累加过，测出来的「慢」就不存在了。
+			const ms = Number(u.searchParams.get('ms') || 2000)
+			const key = `${url}?k=${u.searchParams.get('k') || ''}`
+			const n = (hits.get(key) || 0) + 1
+			hits.set(key, n)
+			send(res, n === 1 ? ms : 0, `<!doctype html><title>slow-once</title><p id="ok">attempt-${n}</p>`)
+			return
+		}
+		if (url === '/hang') {
+			// 永不响应：只能由整体超时（PROXY_TIMEOUT_MS）收场
+			hits.set(url, (hits.get(url) || 0) + 1)
+			req.on('close', () => {})
+			return
+		}
+
 		const file = path.join(ROOT, url === '/' ? 'hostile-css.html' : url)
 		if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
 			res.writeHead(404).end('not found')
@@ -22,5 +56,5 @@ http
 		res.end(fs.readFileSync(file))
 	})
 	.listen(PORT, '127.0.0.1', () => {
-		console.log(`[fixtures] http://127.0.0.1:${PORT}/  (hostile-css.html / ws-test.html)`)
+		console.log(`[fixtures] http://127.0.0.1:${PORT}/  (hostile-css / ws-test / fast / slow-once / hang)`)
 	})

@@ -63,7 +63,9 @@ const STRIP_REQUEST_HEADERS = [
 const DEFAULT_UA =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
 
-const TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS || 45_000)
+// 整体超时必须大于「连接超时 × (重试次数 + 1)」，否则整体计时器会先掐断重试，
+// CONNECT_TIMEOUT_MS 调大就完全不起作用。当前：30s × 2 + 重试间隔 ≈ 61s < 70s。
+const TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS || 70_000)
 const RETRY_CODES = [
 	'UND_ERR_CONNECT_TIMEOUT',
 	'UND_ERR_HEADERS_TIMEOUT',
@@ -76,7 +78,9 @@ const RETRY_CODES = [
 ]
 const RETRY_TIMES = Number(process.env.PROXY_RETRY || 1)
 
-const CONNECT_TIMEOUT = Number(process.env.CONNECT_TIMEOUT_MS || 20_000)
+// 实测（托管沙箱）：到海外站点的 TCP 连接经常超过 20s，github 单次请求 25~50s 才能完成。
+// 20s 的连接超时会把「慢但能通」的站点判成不可达，因此放宽到 30s。
+const CONNECT_TIMEOUT = Number(process.env.CONNECT_TIMEOUT_MS || 30_000)
 
 /**
  * 统一出口 fetch：
@@ -107,13 +111,114 @@ function sleep(ms) {
 	return new Promise((r) => setTimeout(r, ms))
 }
 
+/**
+ * 把 undici 的错误链摊平。
+ *
+ * 双栈环境下（本机有 ::1 与 127.0.0.1）连接失败得到的是 AggregateError，
+ * 真正的 code 藏在 `errors[]` 里，`err.cause.code` 是 undefined ——
+ * 只看 cause.code 会导致既判不出「可重试」，也只剩一句没有信息量的 `fetch failed`。
+ */
+function flattenError(err) {
+	const seen = new Set()
+	const out = []
+	const walk = (e, depth) => {
+		if (!e || typeof e !== 'object' || seen.has(e) || depth > 3) return
+		seen.add(e)
+		out.push(e)
+		if (Array.isArray(e.errors)) e.errors.forEach((n) => walk(n, depth + 1))
+		walk(e.cause, depth + 1)
+	}
+	walk(err, 0)
+	return out
+}
+
 function describeNetError(err) {
-	const cause = err.cause || err
-	const code = cause?.code || err.code
+	const chain = flattenError(err)
+	// 取第一个带 code 的节点：它就是真正失败的原因（如 ECONNREFUSED / UND_ERR_CONNECT_TIMEOUT）
+	const withCode = chain.find((e) => typeof e?.code === 'string')
+	const code = withCode?.code
+	// 没有 code 时取最深层的那条 message —— 链条头部永远是笼统的 `fetch failed`，
+	// 真正的信息在最内层（例如 `bad port`、`other side closed`）。
+	const deepest = chain.filter((e) => typeof e?.message === 'string' && e.message).pop()
+	const detail = withCode?.message || deepest?.message || String(err)
 	return {
 		retryable: Boolean(code) && RETRY_CODES.includes(code),
-		message: code ? `${cause?.message || err.message} (${code})` : err.message,
+		message: code ? `${detail} (${code})` : detail,
 	}
+}
+
+function escapeHtml(s) {
+	return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+}
+
+/**
+ * 目标站不可用时的落地页。
+ *
+ * 原先只 send 一行纯文本（`目标站点响应超时（>45000ms）`），用户在 iframe 里看到的是
+ * 一行没有样式、也没有任何可操作项的灰字，只能自己去刷新。这里给出：发生了什么、
+ * 目标站点是谁、以及「重试 / 在新标签页打开原站」两个可点的下一步。
+ */
+function sendProxyErrorPage(res, { kind, detail, attempts, targetUrl }) {
+	const isTimeout = kind === 'timeout'
+	const title = isTimeout ? '目标站点响应太慢' : '无法连接到目标站点'
+	let host = targetUrl
+	try {
+		host = new URL(targetUrl).host
+	} catch {
+		/* targetUrl 不是合法 URL 时直接展示原文 */
+	}
+	const tried = attempts > 1 ? `已尝试 ${attempts} 次` : '仅尝试 1 次'
+	const reason = isTimeout
+		? `等待超过 ${Math.round(TIMEOUT_MS / 1000)} 秒仍未收到响应。`
+		: '网络层连接失败，通常是目标站不可达或本机出网受限。'
+
+	const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(title)}</title>
+<style>
+	* { box-sizing: border-box; }
+	body {
+		margin: 0; min-height: 100vh; display: grid; place-items: center;
+		background: #f6f7fb; color: #1f2330; padding: 24px;
+		font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+	}
+	.card { max-width: 520px; width: 100%; background: #fff; border-radius: 16px; padding: 28px 28px 24px;
+		box-shadow: 0 12px 40px rgba(20, 24, 40, 0.08); }
+	.icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+		color: #fff; font-weight: 700; font-size: 20px; background: linear-gradient(135deg, #ff8a4c, #f4527d); }
+	h1 { margin: 16px 0 8px; font-size: 19px; letter-spacing: -0.2px; }
+	p { margin: 0 0 6px; color: #5a6072; }
+	.host { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #1f2330;
+		background: #f2f4f9; border-radius: 6px; padding: 1px 6px; word-break: break-all; }
+	.detail { margin-top: 14px; font-size: 12px; color: #8b90a0; word-break: break-all; }
+	.actions { margin-top: 22px; display: flex; gap: 10px; flex-wrap: wrap; }
+	button, a.btn { appearance: none; border: 0; cursor: pointer; font: inherit; font-size: 14px;
+		padding: 9px 18px; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; }
+	button { background: linear-gradient(135deg, #6b7cff, #8f6bff); color: #fff; font-weight: 600; }
+	a.btn { background: #eef0f7; color: #3b4157; }
+</style>
+</head>
+<body>
+	<div class="card">
+		<div class="icon">!</div>
+		<h1>${escapeHtml(title)}</h1>
+		<p>目标站点 <span class="host">${escapeHtml(host)}</span> ${escapeHtml(reason)}</p>
+		<p style="font-size:13px;color:#8b90a0">${escapeHtml(tried)}${isTimeout ? '' : '，每次连接上限 ' + Math.round(CONNECT_TIMEOUT / 1000) + ' 秒'}</p>
+		<p class="detail">${escapeHtml(detail || '')}</p>
+		<div class="actions">
+			<button type="button" onclick="location.reload()">重试</button>
+			<a class="btn" href="${escapeHtml(targetUrl)}" target="_blank" rel="noreferrer noopener">在新标签页打开原站</a>
+		</div>
+	</div>
+</body>
+</html>`
+
+	res.status(502)
+	res.setHeader('cache-control', 'no-store')
+	res.type('text/html; charset=utf-8').send(html)
 }
 
 function pick(value) {
@@ -186,7 +291,8 @@ export async function proxyRequest(req, res, targetUrl) {
 	}
 	const refererForBase = originalReferer ? new URL(originalReferer) : null
 
-	const controller = new AbortController()
+	let controller = new AbortController()
+	let timedOut = false
 	let method = req.method.toUpperCase()
 	if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) method = 'GET'
 
@@ -198,13 +304,19 @@ export async function proxyRequest(req, res, targetUrl) {
 	let upstream
 	let attempt = 0
 	let lastError = null
-	// 每次重试都重建计时器：
-	// 此前在 catch 里 clearTimeout 后再 timer.refresh()，实测 Node 中被 clear 的 Timeout
-	// 无法被 refresh 复活，导致重试请求没有任何超时保护（可无限挂起，直到客户端断开）。
-	const armTimer = () => setTimeout(() => controller.abort(), TIMEOUT_MS)
+	// 每次重试都重建计时器与 AbortController：
+	//  · 被 clear 的 Timeout 无法 refresh 复活（实测），重试会彻底失去超时保护；
+	//  · 已经 abort 过的 signal 永久处于 aborted，复用同一个 controller 会让重试请求立刻失败。
+	// timedOut 用显式标志而不是去猜 AbortError 的形状 —— 判定「谁掐断的」必须确定。
+	const armTimer = () =>
+		setTimeout(() => {
+			timedOut = true
+			controller.abort()
+		}, TIMEOUT_MS)
 	let timer = armTimer()
 	while (attempt < RETRY_TIMES + 1) {
 		attempt++
+		timedOut = false
 		try {
 			upstream = await paFetch(targetUrl.href, {
 				method,
@@ -216,26 +328,30 @@ export async function proxyRequest(req, res, targetUrl) {
 			})
 			break
 		} catch (err) {
-			if (err.name === 'AbortError' && Object.prototype.hasOwnProperty.call(err, 'cause') === false) {
-				clearTimeout(timer)
-				res.status(502).type('text/plain; charset=utf-8').send(`目标站点响应超时（>${TIMEOUT_MS}ms）`)
-				return
+			// 整体超时不重试：两次都跑满 TIMEOUT_MS 会让用户干等两倍时长；
+			// 真正需要靠重试救回的是「连接超时」（由 CONNECT_TIMEOUT_MS 控制、已计入 RETRY_CODES）。
+			if (timedOut) {
+				lastError = `等待响应超过 ${Math.round(TIMEOUT_MS / 1000)} 秒`
+				break
 			}
 			const info = describeNetError(err)
 			lastError = info.message
 			if (!info.retryable || attempt > RETRY_TIMES || method !== 'GET') break
-			await sleep(400 * attempt)
-			// GET 重试：重开超时窗口
 			clearTimeout(timer)
+			await sleep(400 * attempt)
+			// GET 重试：换一副新的 signal，重开超时窗口
+			controller = new AbortController()
 			timer = armTimer()
 		}
 	}
 	clearTimeout(timer)
 	if (!upstream) {
-		res
-			.status(502)
-			.type('text/plain; charset=utf-8')
-			.send(`无法连接目标站点：${lastError || '未知错误'}（已重试 ${attempt} 次）`)
+		sendProxyErrorPage(res, {
+			kind: timedOut ? 'timeout' : 'network',
+			detail: lastError,
+			attempts: attempt,
+			targetUrl: targetUrl.href,
+		})
 		return
 	}
 

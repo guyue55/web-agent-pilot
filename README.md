@@ -92,6 +92,7 @@ scripts/
   check-resume.mjs 回归：跨页面跳转后任务能否自动续跑（含超时/次数/跨站守卫）
   check-nav-loop.mjs 回归：目标站反复自我重定向时能否被拦下且不误伤正常站点
   check-ws.mjs   回归：WebSocket 隧道是否端到端可用
+  check-proxy-timeout.mjs 回归：目标站太慢/连不上时的超时、重试与落地页
   measure-panel-css.mjs 测量：目标站 CSS 对 Panel 的污染（与干净页逐属性对比）
   fixtures/      测试夹具：敌意样式页、WebSocket 测试页、回显服务、静态服务
 ```
@@ -113,6 +114,8 @@ scripts/
 - **停止即断**：page-agent 传入的中止信号会一路带到真正的 `fetch` 上；此前该信号被丢弃，点「停止」后要等本次模型请求跑满超时才响应（实测 5s vs 修复后 2ms）。
 - **跨页面续跑**：目标页一跳转，iframe 里的 Agent / 历史会连根销毁。bridge 把「正在执行的任务」记进 `sessionStorage`，新页面就绪后自动接着执行（最多 2 次、90 秒内有效）；只有「同站跳转」或「来源是本应用代理页」才续跑，用户在地址栏另开站点不会把旧任务套上去。
 - **面板可恢复**：点 Panel 右上角的 X 会连 Agent 一起销毁（演示站靠书签重新注入，本项目没有这个入口）。顶栏新增「AI 面板」按钮，可识别已销毁的实例并重建，不必刷新页面。
+- **目标站不可用时的落地页**：此前只 `send` 一行纯文本（`目标站点响应超时（>45000ms）`），在 iframe 里既没样式也没有可操作项。现在返回一张说明卡片：区分「太慢」与「连不上」、点出目标站点、给出重试按钮与「在新标签页打开原站」。同时把错误信息摊平到最内层原因（undici 双栈下连接失败是 `AggregateError`，只看 `cause.code` 会退化成 `fetch failed`），并保留错误码便于排查。
+- **超时与重试的时序约束**：`PROXY_TIMEOUT_MS` 必须大于 `CONNECT_TIMEOUT_MS × (重试次数 + 1)` —— 否则整体计时器会先掐断重试，把连接超时调大完全不起作用。整体超时不重试（两次跑满会让用户干等双倍时长），只有连接层失败才重试一次。
 
 ## 已知限制
 
@@ -131,7 +134,8 @@ scripts/
 | ------------------ | ------- | --------------- |
 | `PORT`             | `3000`  | 监听端口            |
 | `ALLOW_LOCALHOST`  | `false` | 是否允许代理本机 / 内网地址 |
-| `PROXY_TIMEOUT_MS` | `45000` | 单请求代理超时         |
+| `PROXY_TIMEOUT_MS` | `70000` | 单请求代理超时（需大于 `CONNECT_TIMEOUT_MS × (重试次数+1)`） |
+| `CONNECT_TIMEOUT_MS` | `30000` | 与目标站建连超时       |
 | `WS_CONNECT_TIMEOUT_MS` | `15000` | WebSocket 隧道建连超时 |
 | `DEBUG_LLM`        | 关闭      | 打印 LLM 转发日志     |
 | `DEBUG_PROXY`      | 关闭      | 打印代理细节          |
@@ -167,7 +171,7 @@ npm run check:resume    # 跳转 → 自动续跑；次数/过期/跨站三种�
 浮层隔离、导航死循环、WebSocket 这三项还需要夹具服务：
 
 ```bash
-npm run fixtures        # 3500：敌意样式页 + WS 测试页
+npm run fixtures        # 3500：敌意样式页 + WS 测试页 + fast / slow-once / hang
 npm run mock:ws         # 3501：WebSocket 回显
 
 npm run check:ws        # WS 隧道是否端到端可用（含静态常量完整性）
@@ -176,6 +180,17 @@ npm run check:nav-loop  # 知乎类「自我重定向」站点被拦下，正常
 # 测量目标站 CSS 对 Panel 的污染（默认对比 example / 淘宝 / 知乎 / 必应）
 BASE=http://127.0.0.1:3211 npm run measure:css
 TARGETS="https://example.com,http://127.0.0.1:3500/hostile-css.html" BASE=http://127.0.0.1:3211 npm run measure:css
+```
+
+代理超时与落地页的回归要**另起一个实例**（把超时调小才验证得动），并清掉环境的代理变量 ——
+否则 `paFetch` 会回退到 `HTTP_PROXY`，把「连不上」的真实错误盖成 `HTTP Tunneling` 失败：
+
+```bash
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+  PORT=3214 ALLOW_LOCALHOST=true PROXY_TIMEOUT_MS=1200 PROXY_RETRY=1 CONNECT_TIMEOUT_MS=3000 npm start
+
+BASE=http://127.0.0.1:3214 npm run check:proxy
+# A 正常站不受影响 / B 整体超时到点即收场且不重试 / C 连接失败重试一次并给出落地页
 ```
 
 ## 部署
