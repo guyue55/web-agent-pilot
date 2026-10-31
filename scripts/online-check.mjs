@@ -12,7 +12,9 @@ async function check(t) {
 		const j = await r.json()
 		if (!r.ok) return { t, ok: false, msg: j.error || `resolve ${r.status}` }
 		const proxied = `${BASE}${j.proxyUrl}${j.proxyUrl.includes('?') ? '&' : '?'}${SHARE ? `sharecode=${SHARE}` : ''}`
-		const res = await fetch(proxied, { signal: AbortSignal.timeout(40_000) })
+		// 客户端超时必须大于服务端的代理预算（PROXY_TIMEOUT_MS，默认 70s），
+		// 否则测到的是「量具先超时」，会把「服务端还在努力」误报成站点不可用。
+		const res = await fetch(proxied, { signal: AbortSignal.timeout(85_000) })
 		const text = await res.text()
 		return {
 			t,
