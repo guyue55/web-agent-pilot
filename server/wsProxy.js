@@ -108,8 +108,10 @@ function pipeOnce(target, req, socket, head) {
 			? tls.connect({
 					host: hostname,
 					port,
-					servername: target.hostname, // SNI 必须是域名，否则很多站点直接断
-					rejectUnauthorized: false, // 代理场景不校验上游证书（目标站证书问题不该挡住用户）
+				servername: target.hostname, // SNI 必须是域名，否则很多站点直接断
+				// 默认不校验上游证书：代理要够到自签/过期/内网证书站点，严格校验会把它们挡掉。
+				// 设 PROXY_REJECT_UNAUTHORIZED=true 可开启严格校验（接受中间人风险换取证书一致性）。
+				rejectUnauthorized: process.env.PROXY_REJECT_UNAUTHORIZED === 'true',
 					lookup: safeLookup,
 				})
 			: net.connect({ host: hostname, port, lookup: safeLookup })

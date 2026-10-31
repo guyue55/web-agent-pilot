@@ -35,7 +35,8 @@ app.disable('x-powered-by')
  *   导致首次 / 非 /__pa 请求落到公用会话（'default'），多用户共用同一个服务端 CookieJar。
  */
 app.use((req, res, next) => {
-	req.cookies = {}
+	// 无原型对象：下面用远端 cookie 名作键写入，若为 __proto__/constructor 会污染原型
+	req.cookies = Object.create(null)
 	const raw = req.headers.cookie
 	if (raw) {
 		for (const part of raw.split(';')) {
@@ -43,6 +44,8 @@ app.use((req, res, next) => {
 			if (idx === -1) continue
 			const key = part.slice(0, idx).trim()
 			if (!key) continue
+			// 跳过可能污染原型的键（Object.create(null) 之外再上一道闸）
+			if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue
 			const value = part.slice(idx + 1).trim()
 			try {
 				req.cookies[key] = value ? decodeURIComponent(value) : value
@@ -157,10 +160,12 @@ app.all('/api/llm/proxy', async (req, res) => {
 
 	const body = await upstream.text()
 	if (process.env.DEBUG_LLM === 'true' || upstream.status >= 400) {
+		// 清洗换行，避免上游 body 注入日志分隔符伪造日志条目
+		const redact = (s) => String(s).replace(/[\r\n]/g, ' ')
 		console.warn(
-			`[llm-proxy] ${targetUrl.href} -> HTTP ${upstream.status} reqBytes=${
+			`[llm-proxy] ${redact(targetUrl.href)} -> HTTP ${upstream.status} reqBytes=${
 				(req.headers['content-length'] ?? '?')
-			}\n${body.slice(0, 600)}`
+			}\n${redact(body.slice(0, 600))}`
 		)
 	}
 	res.status(upstream.status)
@@ -326,6 +331,7 @@ app.all('*', async (req, res, next) => {
 	try {
 		await proxyRequest(req, res, result.url)
 	} catch (err2) {
+		// codeql[js/xss-through-exception] 响应为 text/plain，浏览器不按 HTML 渲染，非 XSS
 		res.status(502).type('text/plain; charset=utf-8').send(`代理失败：${err2.message}`)
 	}
 })
@@ -334,6 +340,7 @@ app.use((req, res) => {
 	res
 		.status(404)
 		.type('text/plain; charset=utf-8')
+		// codeql[js/reflected-xss] 响应为 text/plain，反射的 method/path 不会被当作 HTML 执行
 		.send(`404 Not Found（${req.method} ${req.path}）`)
 })
 

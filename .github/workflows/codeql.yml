@@ -30,6 +30,7 @@ jobs:
           languages: javascript-typescript
           # 在默认安全查询之外加质量查询，覆盖更多注入/逻辑缺陷
           queries: security-and-quality
+          config: .github/codeql/codeql-config.yml
 
       - name: 自动构建
         uses: github/codeql-action/autobuild@v3
