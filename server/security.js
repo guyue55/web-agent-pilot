@@ -107,4 +107,34 @@ export function isSafeIpForProxy(ip) {
 	return !isPrivateIP(ip) || ALLOW_LOCALHOST
 }
 
+/**
+ * 建连时的 IP 校验（传给 net.connect / tls.connect / undici 的 `lookup`）。
+ *
+ * 为什么必须在这里再做一次：`assertTargetSafe` 是「先解析、后连接」，
+ * 而真正建连时 Node / undici 会**自己再解析一次**。攻击者控制的 DNS 只要
+ * 第一次回答公网、第二次回答 127.0.0.1，预检就白做了（实测可读出内网数据）。
+ * 这个函数是连接路径上唯一还能拦住的地方 —— 它校验的就是即将被连接的那个 IP。
+ */
+export function safeLookup(hostname, options, callback) {
+	let opts = options
+	let cb = callback
+	if (typeof opts === 'function') {
+		cb = opts
+		opts = {}
+	}
+	dns.lookup(hostname, opts || {}, (err, address, family) => {
+		if (err) return cb(err)
+		const list = Array.isArray(address) ? address : [{ address, family }]
+		const bad = list.find((a) => a && !isSafeIpForProxy(a.address))
+		if (bad) {
+			const blocked = new Error(
+				`目标地址解析到内网 / 保留地址（${bad.address}），已拒绝连接`
+			)
+			blocked.code = 'PA_BLOCKED_TARGET'
+			return cb(blocked)
+		}
+		return Array.isArray(address) ? cb(null, address) : cb(null, address, family)
+	})
+}
+
 export { resolveAddresses }

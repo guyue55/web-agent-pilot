@@ -15,7 +15,7 @@ import net from 'node:net'
 import tls from 'node:tls'
 
 import { decodeProxyUrl, PROXY_PREFIX } from './rewrite.js'
-import { validateTargetUrl } from './security.js'
+import { validateTargetUrl, safeLookup } from './security.js'
 import { getJar, buildCookieHeader } from './cookieJar.js'
 
 export const WS_PREFIX = '/__paws/'
@@ -102,14 +102,17 @@ function pipeOnce(target, req, socket, head) {
 
 	let upstream
 	try {
+		// lookup 必须传：validateTargetUrl 的 DNS 结果与这里真正建连时的解析是两次
+		// 独立查询，只信前者就给了 DNS rebinding 可乘之机（实测可连到内网）。
 		upstream = secure
 			? tls.connect({
 					host: hostname,
 					port,
 					servername: target.hostname, // SNI 必须是域名，否则很多站点直接断
 					rejectUnauthorized: false, // 代理场景不校验上游证书（目标站证书问题不该挡住用户）
+					lookup: safeLookup,
 				})
-			: net.connect({ host: hostname, port })
+			: net.connect({ host: hostname, port, lookup: safeLookup })
 	} catch {
 		return reject(socket, 502, 'Bad Gateway')
 	}

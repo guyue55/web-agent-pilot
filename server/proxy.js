@@ -17,7 +17,7 @@ import {
 	PROXY_PREFIX,
 	SHARE_PARAM,
 } from './rewrite.js'
-import { checkProxyTarget, resolveAddresses, isSafeIpForProxy } from './security.js'
+import { checkProxyTarget, resolveAddresses, isSafeIpForProxy, safeLookup } from './security.js'
 import { rememberTarget, getRememberedTarget } from './sessionState.js'
 
 const HOP_BY_HOP = [
@@ -41,6 +41,9 @@ const STRIP_RESPONSE_HEADERS = [
 	'cross-origin-embedder-policy',
 	'cross-origin-resource-policy',
 	'clear-site-data',
+	// alt-svc 会把「目标站支持 HTTP/3」的声明搬到我们的源上（h3=":443" 指向本服务），
+	// 语义错位且可能让浏览器尝试连一个不存在的 h3 端点 —— 与 jsproxy 的处理一致，直接删掉。
+	'alt-svc',
 	'content-length',
 	'content-encoding',
 	'set-cookie',
@@ -91,16 +94,34 @@ const upstreamProxy =
 	process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy
 
 /** 直连优先；仅当直连在传输层失败时，才回退到环境里的代理出口 */
-const directAgent = new Agent({ connect: { timeout: CONNECT_TIMEOUT } })
+const directAgent = new Agent({
+	connect: {
+		timeout: CONNECT_TIMEOUT,
+		// 建连时校验实际要连的 IP：预检解析与建连解析是两次独立查询，
+		// 只信预检结果等于给 DNS rebinding 留门（实测可绕过）。
+		lookup: safeLookup,
+	},
+})
 const proxyAgent = upstreamProxy ? new ProxyAgent({ uri: upstreamProxy, connect: { timeout: CONNECT_TIMEOUT } }) : null
 
 export const UPSTREAM_PROXY = upstreamProxy ? '<configured>' : null
+
+/** 被安全策略在建连时拦下的错误：绝不能再回退到代理出口重试一遍 */
+function isBlockedError(err) {
+	let cur = err
+	for (let depth = 0; cur && depth < 6; depth++) {
+		if (cur.code === 'PA_BLOCKED_TARGET') return true
+		cur = cur.cause || cur.errors?.[0] || null
+	}
+	return false
+}
 
 export async function paFetch(url, options = {}) {
 	try {
 		return await undiciFetch(url, { ...options, dispatcher: directAgent })
 	} catch (err) {
-		if (!proxyAgent) throw err
+		// 安全拦截不是「网络不通」，换条出口重试只会把拦下来的请求放过去
+		if (!proxyAgent || isBlockedError(err)) throw err
 		// 流式 body 无法二次发送，仅在字符串 body 时回退
 		if (options.body != null && typeof options.body !== 'string') throw err
 		return await undiciFetch(url, { ...options, dispatcher: proxyAgent })
@@ -472,7 +493,12 @@ export function resolveFallbackRequest(req) {
 	}
 }
 
-/** 目标主机是否允许代理（二次 DNS 校验，防 DNS rebinding） */
+/**
+ * 目标主机是否允许代理（预检：解析 DNS 后校验目标 IP）
+ *
+ * 注意这**不是**完整的 rebinding 防护：这里是第一次解析，真正建连时
+ * Node / undici 会再解析一次。连接路径上的兜底在 security.safeLookup。
+ */
 export async function assertTargetSafe(targetUrl) {
 	const err = checkProxyTarget(targetUrl.protocol, targetUrl.hostname)
 	if (err) return err
