@@ -183,7 +183,7 @@ app.all(`${PROXY_PREFIX}*`, async (req, res) => {
 })
 
 
-app.get(['/', '/index.html'], (_req, res) => { // codeql[js/missing-rate-limiting] 仅提供静态首页，非高成本未鉴权操作，无需限速
+app.get(['/', '/index.html'], (_req, res) => {
 	res.sendFile(path.join(PUBLIC_DIR, 'index.html'))
 })
 
