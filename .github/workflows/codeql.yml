@@ -28,7 +28,7 @@ jobs:
         with:
           # JS/TS 统一语言标识
           languages: javascript-typescript
-          config: .github/codeql/codeql-config.yml
+          config-file: .github/codeql/codeql-config.yml
 
       - name: 自动构建
         uses: github/codeql-action/autobuild@v3
