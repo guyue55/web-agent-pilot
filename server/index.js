@@ -15,6 +15,7 @@ import {
 	UPSTREAM_PROXY,
 } from './proxy.js'
 import { validateTargetUrl } from './security.js'
+import { getDnsStats } from './dnsResolver.js'
 import { attachWsProxy } from './wsProxy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -58,7 +59,14 @@ app.use((req, res, next) => {
 })
 
 app.get('/api/health', (_req, res) => {
-	res.json({ ok: true, time: new Date().toISOString(), node: process.version, upstreamProxy: UPSTREAM_PROXY })
+	res.json({
+		ok: true,
+		time: new Date().toISOString(),
+		node: process.version,
+		upstreamProxy: UPSTREAM_PROXY,
+		// 目标站解析走 DoH 还是系统解析 —— 排查「站点解析到错误服务器」时看这里
+		dns: getDnsStats(),
+	})
 })
 
 /**

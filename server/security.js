@@ -3,8 +3,8 @@
  * - 只允许 http(s)
  * - SSRF 防护：解析 DNS 后校验目标 IP 不属于私有 / 保留网段
  */
-import dns from 'node:dns'
 import net from 'node:net'
+import { resolveHost } from './dnsResolver.js'
 
 const ALLOW_LOCALHOST = process.env.ALLOW_LOCALHOST === 'true'
 
@@ -46,20 +46,18 @@ function isPrivateIP(ip) {
 	return false
 }
 
-const dnsCache = new Map()
+/**
+ * 解析目标域名（DoH 优先、系统解析兜底，见 dnsResolver.js）。
+ * 只保留地址字符串，供 SSRF 网段校验使用。
+ */
 async function resolveAddresses(hostname) {
-	if (net.isIP(hostname)) return [hostname]
-	if (dnsCache.has(hostname)) return dnsCache.get(hostname)
-	let addresses = []
 	try {
-		const results = await dns.promises.lookup(hostname, { all: true })
-		addresses = results.map((r) => r.address)
-		dnsCache.set(hostname, addresses)
-		setTimeout(() => dnsCache.delete(hostname), 60_000).unref?.()
+		const records = await resolveHost(hostname)
+		return records.map((r) => r.address)
 	} catch {
-		addresses = []
+		// 解析失败与「没有地址」在调用方是同一个语义：不能放行
+		return []
 	}
-	return addresses
 }
 
 /**
@@ -122,19 +120,27 @@ export function safeLookup(hostname, options, callback) {
 		cb = opts
 		opts = {}
 	}
-	dns.lookup(hostname, opts || {}, (err, address, family) => {
-		if (err) return cb(err)
-		const list = Array.isArray(address) ? address : [{ address, family }]
-		const bad = list.find((a) => a && !isSafeIpForProxy(a.address))
-		if (bad) {
-			const blocked = new Error(
-				`目标地址解析到内网 / 保留地址（${bad.address}），已拒绝连接`
-			)
-			blocked.code = 'PA_BLOCKED_TARGET'
-			return cb(blocked)
-		}
-		return Array.isArray(address) ? cb(null, address) : cb(null, address, family)
-	})
+	const wantsAll = Boolean(opts?.all)
+	resolveHost(hostname, opts || {}).then(
+		(list) => {
+			if (!list.length) {
+				const notFound = new Error(`域名解析失败：${hostname}`)
+				notFound.code = 'ENOTFOUND'
+				return cb(notFound)
+			}
+			const bad = list.find((a) => a && !isSafeIpForProxy(a.address))
+			if (bad) {
+				const blocked = new Error(
+					`目标地址解析到内网 / 保留地址（${bad.address}），已拒绝连接`
+				)
+				blocked.code = 'PA_BLOCKED_TARGET'
+				return cb(blocked)
+			}
+			if (wantsAll) return cb(null, list)
+			return cb(null, list[0].address, list[0].family)
+		},
+		(err) => cb(err)
+	)
 }
 
 export { resolveAddresses }

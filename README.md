@@ -187,6 +187,8 @@ npm run check:nav-loop  # 知乎类「自我重定向」站点被拦下，正常
 npm run check:storage   # 按站点隔离：LS/SS/IDB/cookie 不串味、clear() 不互删、续跑键仍共享
 npm run check:fidelity  # 语义保真：shim 开/关两组跑同一段操作，确认没把原生行为改坏
 npm run check:rebind    # DNS rebinding 打不穿 HTTP 与 WS 两条路径（脚本自带替身 DNS）
+npm run check:dns       # 目标站解析：DoH 优先 / 连不上回退系统解析 / fake-ip 环境放行
+npm run check:alias     # 模型把 execute_javascript 写成 script 时不会整轮报废
 ```
 
 # 测量目标站 CSS 对 Panel 的污染（默认对比 example / 淘宝 / 知乎 / 必应）
@@ -216,6 +218,27 @@ npm ci && NODE_ENV=production PORT=3000 npm start
 > **出网能力决定可用率**：代理是服务端抓取目标站点，所以部署机器必须能访问外网。  
 > 本地 / 自有服务器通常可访问所有站点；托管沙箱类环境可能对部分域名限制出网  
 > （可用 `scripts/online-check.mjs` 先测一遍）。
+
+### 目标站域名解析（`server/dnsResolver.js`）
+
+线上（CloudStudio）实测过一个很坑的现象：访问 `https://skillhub.cn/` 时页面显示
+「糟糕，页面好像去火星了......，错误原因：页面未找到」，把域名写成带尾点的
+`skillhub.cn.` 再试，TLS 证书竟是 `*.unionpayintl.com` —— 同一个域名两次查询落到
+两组互不相关的服务器，而 DoH 查询稳定给出 EdgeOne 节点。根因是部署机的系统解析
+不可信，代理连到了别人的 404 页。
+
+因此解析改成三级策略：
+
+1. **fake-ip 直通**：系统解析落在 `198.18.0.0/15`（Clash / sing-box 的 fake-ip）时
+   原样放行 —— 这种环境下系统解析就是代理入口，换成真实 IP 反而绕过代理、被墙站点直接超时。
+2. **DoH 优先**：其余情况走 `dns.alidns.com` → `doh.pub`，并对结果做一次 443 连通性
+   探测（400ms）。能连才用，地址会排到列表最前。
+3. **回退系统解析**：DoH 不可达 / 查不到 / 连不上一律退回系统解析。
+
+相关环境变量：`PROXY_DNS_MODE=auto|system|doh`（默认 `auto`）、`DOH_TIMEOUT_MS`、
+`DNS_PROBE_TIMEOUT_MS`、`DNS_CACHE_TTL_MS`（设 0 可彻底关缓存，回归脚本用）。
+`GET /api/health` 的 `dns` 字段会给出实际走了哪条分支（`dohHits` / `fakeIpPassthrough` /
+`systemFallbacks` / `dohUnreachable`），排查「站点解析到错误服务器」时先看这里。
 
 ## 调优小贴士
 

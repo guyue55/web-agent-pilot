@@ -39,16 +39,24 @@ const ok = (cond, label, extra = '') => {
 }
 
 // ---------------- 伪造 DNS：校验侧说公网，连接侧说本机
+//
+// 注意计数方式：解析走 dnsResolver.resolveHost，其系统兜底分支用的是
+// dns.promises.lookup。这里让第一次答复给公网、之后都给本机 ——
+// 这正是 rebinding 的形态：预检放行，建连时才换成本机地址。
 const origLookup = dns.lookup.bind(dns)
 const origPromiseLookup = dns.promises.lookup.bind(dns.promises)
 const hits = { verify: 0, connect: 0 }
+let promiseCalls = 0
+
+const resetRebind = () => {
+	promiseCalls = 0
+}
 
 dns.promises.lookup = async (hostname, options) => {
 	if (hostname === EVIL) {
 		hits.verify++
-		return options?.all
-			? [{ address: '93.184.216.34', family: 4 }]
-			: { address: '93.184.216.34', family: 4 }
+		const address = promiseCalls++ === 0 ? '93.184.216.34' : '127.0.0.1'
+		return options?.all ? [{ address, family: 4 }] : { address, family: 4 }
 	}
 	return origPromiseLookup(hostname, options)
 }
@@ -84,6 +92,12 @@ await new Promise((r) => victimWs.listen(WS_PORT, '127.0.0.1', r))
 // ---------------- 应用（默认配置：不放行本机 / 内网）
 process.env.PORT = String(APP_PORT)
 process.env.ALLOW_LOCALHOST = 'false'
+// 本用例要观察「预检解析」与「建连解析」是两次独立查询：
+// 解析结果缓存会把两次合并成一次，那样就测不到建连路径了，这里关掉缓存。
+process.env.DNS_CACHE_TTL_MS = '0'
+// 本用例验证的是「IP 校验」这一层，DoH 与系统解析最后都走同一段校验代码；
+// 用 system 模式可以避免每次解析都先等一轮 DoH 对不存在域名的 NXDOMAIN。
+process.env.PROXY_DNS_MODE = 'system'
 await import('../server/index.js')
 await new Promise((r) => setTimeout(r, 800))
 
@@ -123,17 +137,22 @@ const literal = await get(`/__pa/http/127.0.0.1:${HTTP_PORT}/`)
 ok(literal.status === 403, 'IP 字面量被拦（基线）', `状态 ${literal.status}`)
 
 console.log('\n===== B) HTTP 路径：域名 rebinding =====')
+resetRebind()
 const viaHttp = await get(`/__pa/http/${EVIL}:${HTTP_PORT}/`)
 ok(!viaHttp.body.includes(SECRET), '没有读到内网数据', `状态 ${viaHttp.status}`)
 ok(viaHttp.status !== 200, '请求没有被当成正常响应返回', `状态 ${viaHttp.status}`)
 
 console.log('\n===== C) WebSocket 路径：域名 rebinding =====')
+resetRebind()
 const viaWs = await upgrade(`/__paws/http/${EVIL}:${WS_PORT}/echo`)
 ok(!viaWs.includes(SECRET), '没有读到内网数据', (viaWs.split('\r\n')[0] || '').slice(0, 60))
 ok(/40[134]|502/.test(viaWs.split('\r\n')[0] || ''), '连接被拒绝/失败而不是 101', (viaWs.split('\r\n')[0] || '').slice(0, 60))
 
-console.log('\nDNS 打点（校验侧 / 连接侧）:', hits.verify, '/', hits.connect)
-ok(hits.verify > 0 && hits.connect > 0, '两次解析都发生过（说明确实在测建连路径）')
+console.log('\nDNS 打点（预检解析 / 建连侧 callback 解析）:', hits.verify, '/', hits.connect)
+ok(
+	hits.verify + hits.connect >= 2,
+	'同一域名被解析了不止一次（说明确实走到了建连路径，并被当场拦下）'
+)
 
 victimHttp.close()
 victimWs.close()
