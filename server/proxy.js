@@ -125,12 +125,19 @@ function isPlatformCredential(value, spaceKey) {
 	}
 }
 
-/** 文档级导航：浏览器不会在这种请求上带 Authorization，带上的一定是环境加的 */
-function isNavigationRequest(headers) {
+/**
+ * 文档级导航（iframe / 主文档跳转），区别于 fetch / XHR 这类子资源请求。
+ *
+ * 两种用途：浏览器不会在导航请求上带 Authorization（带上的一定是环境加的）；
+ * 兜底路由 / 会话记忆则据此区分「文档」与子资源（后者不该改「当前目标站」）。
+ */
+export function isNavigationRequest(headers) {
 	const mode = String(headers['sec-fetch-mode'] || '')
 	if (mode) return mode === 'navigate'
 	const dest = String(headers['sec-fetch-dest'] || '')
-	return dest === 'document' || dest === 'iframe'
+	if (dest) return dest === 'document' || dest === 'iframe'
+	// 无 Fetch Metadata（老浏览器）时按 Accept 兜底
+	return String(headers.accept || '').includes('text/html')
 }
 
 const DEFAULT_UA =
@@ -473,10 +480,11 @@ export async function proxyRequest(req, res, targetUrl) {
 	const setCookies = upstream.headers.getSetCookie?.() ?? []
 	await storeCookies(jar, setCookies, targetUrl.href)
 
-	// 记住该会话最近代理的目标站点：目标站 JS 发出的同源绝对路径请求
-	// （如 location.href='/s?wd=x'，无法在注入层改写）到达服务端时若缺少
-	// 可解析 Referer，兜底路由可据此还原目标站点，避免 404
-	rememberTarget(sessionId, targetUrl)
+	// 记住该会话最近打开的**文档**目标站（不含图片 / 上报 / 接口等子资源）：
+	// 目标站 JS 发出的同源绝对路径请求（如 location.href='/s?wd=x'，无法在
+	// 注入层改写）到达服务端时若缺少可解析 Referer，兜底路由可据此还原目标站点。
+	// 只认导航，否则最后一个 CDN 图片就会把记忆改到别人家的域名上。
+	if (isNavigationRequest(req.headers)) rememberTarget(sessionId, targetUrl, share)
 
 	// 重定向：改写 Location 交回浏览器，让 iframe 地址栏同步更新
 	const location = upstream.headers.get('location')
@@ -564,23 +572,42 @@ function refererReqPath(req) {
 
 /**
  * 统一兜底解析：优先用 Referer 还原目标站点；Referer 缺失或不可解析时，
- * 回退到「会话最近代理的目标 origin」+ 当前请求路径。
+ * 回退到「会话最近打开的目标 origin」+ 当前请求路径。
  *
  * 覆盖场景（此前均会 404）：
  *  - 目标站 JS `location.href = '/path?...'`（location 不可覆写，注入层拦不住）
  *  - 动态 form.submit()（如百度 virtual-form），且页面声明 no-referrer / 仅 origin
+ *
+ * 返回值带上 share：还原后的站内路径通常不带访问码，回跳时要补回去。
  */
 export function resolveFallbackRequest(req) {
 	const referer = req.headers.referer
 	if (referer && referer.includes(PROXY_PREFIX)) {
 		const viaReferer = resolveFallbackTarget(req)
-		if (viaReferer) return viaReferer
+		if (viaReferer) {
+			if (viaReferer.error) return viaReferer
+			// 访问码优先取本次请求，其次取 Referer —— 还原后的站内路径通常不带它，
+			// 不补回去，线上网关会把回跳后的整页资源全判 403
+			let share = req.query?.[SHARE_PARAM] ? String(req.query[SHARE_PARAM]) : ''
+			if (!share) {
+				try {
+					share = new URL(referer, `http://${req.headers.host}`).searchParams.get(SHARE_PARAM) || ''
+				} catch {
+					share = ''
+				}
+			}
+			return { ...viaReferer, via: 'referer', share }
+		}
 	}
 	const remembered = getRememberedTarget(req.cookies?.pa_sid || 'default')
 	if (!remembered) return null
 	try {
 		// 访问码不属于目标站，需剔除；路径为站内同源绝对路径，直接挂到目标 origin
-		return { url: new URL(remembered.origin + stripShare(refererReqPath(req))), via: 'session' }
+		return {
+			url: new URL(remembered.origin + stripShare(refererReqPath(req))),
+			via: 'session',
+			share: req.query?.[SHARE_PARAM] ? String(req.query[SHARE_PARAM]) : remembered.share || '',
+		}
 	} catch {
 		return null
 	}

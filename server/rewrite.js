@@ -234,10 +234,22 @@ export function rewriteHtml(html, base, bridgeScript = '/_app/bridge.js', share 
 		return tag
 	})
 
-	// <base href> 指向代理路径，未改写的相对 URL 也由浏览器自动解析到代理
+	// <base href> 指向代理路径，未改写的相对 URL 也由浏览器自动解析到代理。
+	//
+	// 必须是「目录」而不是页面本身：写成 /__pa/https/site/skills 时，浏览器把
+	// skills 当成文件名，相对地址 a.png 会被解析到上一级 /__pa/https/site/a.png，
+	// 而真实站点里 https://site/skills 的相对地址解析到 /a.png。
+	// 用 new URL('.', page) 取目录（带尾斜杠、丢掉 query）与真实站点完全一致。
+	//
 	// storage shim 必须排在所有页面脚本之前：代理页共用同一个源，
 	// 不先接管 localStorage / sessionStorage，不同站点的数据就会互相串味。
+	const baseDir = new URL('.', base.href)
 	const storageShim = appendQuery('/_app/storage-shim.js', {
+		[SHARE_PARAM]: share,
+	})
+	// 路径还原必须排在任何页面脚本之前：纯前端渲染的站点在初始化路由时
+	// 就会读 location.pathname，晚一步就已经把前缀当成未知路径渲染完了
+	const pathShim = appendQuery('/_app/path-shim.js', {
 		[SHARE_PARAM]: share,
 	})
 	// 目标站 origin 走 data 属性而不是 ?o=：线上网关会把「查询串里带 URL」的请求
@@ -245,7 +257,8 @@ export function rewriteHtml(html, base, bridgeScript = '/_app/bridge.js', share 
 	// 都被拦），那样 shim 脚本根本加载不到，跨站隔离会静默失效。
 	const injection =
 		`<script src="${escapeHtmlAttr(storageShim)}" data-pa-o="${escapeHtmlAttr(base.origin)}"></script>` +
-		`<base href="${escapeHtmlAttr(encodeProxyUrl(base))}">` +
+		`<script src="${escapeHtmlAttr(pathShim)}"></script>` +
+		`<base href="${escapeHtmlAttr(encodeProxyUrl(baseDir))}">` +
 		`<script src="${escapeHtmlAttr(appendQuery(bridgeScript, { [SHARE_PARAM]: share }))}"></script>`
 
 	const headMatch = /<head\b[^>]*>/i.exec(out)

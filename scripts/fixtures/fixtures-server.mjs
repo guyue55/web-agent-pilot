@@ -55,6 +55,22 @@ http
 			return
 		}
 
+		// ---- 供「导航死循环保护」回归使用的自跳转站 ----
+		// 必须是「文档级」重复加载：每轮都是完整的新文档，bridge 会重新执行并累加计数。
+		// 用 302 模拟不出来 —— 302 链只在最后一个响应上落地一个文档，中间跳转不产生文档。
+		if (url === '/loop') {
+			send(
+				res,
+				0,
+				`<!doctype html><title>loop</title><p id="loop">loop</p><script>
+document.addEventListener('DOMContentLoaded', function () {
+	setTimeout(function () { location.replace('/loop') }, 10)
+})
+</script>`
+			)
+			return
+		}
+
 		const file = path.join(ROOT, url === '/' ? 'hostile-css.html' : url)
 		if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
 			res.writeHead(404).end('not found')

@@ -11,6 +11,7 @@ import {
 	proxyRequest,
 	assertTargetSafe,
 	resolveFallbackRequest,
+	isNavigationRequest,
 	paFetch,
 	UPSTREAM_PROXY,
 } from './proxy.js'
@@ -217,20 +218,82 @@ function isOwnSiteRequest(req) {
 	return site === 'same-origin' || site === 'none'
 }
 
-/** 文档级导航（iframe / 主文档跳转），区别于 fetch / XHR 这类子资源请求 */
-function isNavigationRequest(req) {
-	const mode = String(req.headers['sec-fetch-mode'] || '')
-	if (mode) return mode === 'navigate'
-	const dest = String(req.headers['sec-fetch-dest'] || '')
-	if (dest) return dest === 'document' || dest === 'iframe'
-	// 无 Fetch Metadata（老浏览器）时按 Accept 兜底
-	return String(req.headers.accept || '').includes('text/html')
+/**
+ * 兜底回跳页。
+ *
+ * 为什么不直接 307：path-shim 把页面地址还原成站点真实路径后，刷新 /
+ * location.href 跳转这类浏览器真发请求的场景不会再带可解析的 Referer，
+ * 服务端只剩「该会话最近打开的目标站」可用 —— 而 cookie 是浏览器级的，
+ * 同一浏览器开两个标签看不同站点时这条记忆会互相覆盖（实测：skillhub
+ * 页刷新后曾被送到 cloudcache 的 XML 错误页）。
+ *
+ * 真值在标签页自己手里：path-shim 把「目标站 + 访问码」写进了 sessionStorage
+ * 的 pa.docTarget（按标签页隔离）。所以先回一个极轻的页面让它自己报出来，
+ * 再 location.replace 回代理路径；服务端记忆只作为页面里也读不到时的兜底。
+ */
+function renderHopPage(fallbackOrigin, share) {
+	// 内联到 script 里，防止 `</script>` 截断（origin/share 来自 URL 与 query，仍按最严处理）
+	const asJs = (v) => JSON.stringify(String(v ?? '')).replace(/</g, '\\u003c')
+	return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>正在打开页面…</title>
+<style>
+html,body{margin:0;height:100%;background:#f9fafb;color:#374151;
+font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+.box{height:100%;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center}
+a{color:#2563eb;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="box" id="box">正在打开页面…</div>
+<script>
+(function () {
+	var fallbackOrigin = ${asJs(fallbackOrigin)};
+	var share = ${asJs(share)};
+	var rec = '';
+	try { rec = sessionStorage.getItem('pa.docTarget') || ''; } catch (e) {}
+
+	var origin = '';
+	if (rec) {
+		var qi = rec.indexOf('?');
+		origin = qi === -1 ? rec : rec.slice(0, qi);
+		var m = /[?&]sharecode=([^&]*)/.exec(rec);
+		if (m && !share) {
+			try { share = decodeURIComponent(m[1]); } catch (e2) { share = ''; }
+		}
+	}
+	if (!/^https?:\\/\\/[^/]+$/.test(origin)) origin = fallbackOrigin;
+	if (!/^https?:\\/\\/[^/]+$/.test(origin)) return fail('无法确定要打开的站点');
+
+	// 回跳后若是死循环，说明代理本身也打不开，停在提示上而不是无限跳
+	var hop = 0;
+	try { hop = Number(sessionStorage.getItem('pa.hop') || '0') || 0; } catch (e) {}
+	if (hop > 3) return fail('页面反复跳转失败，请返回首页重试');
+	try { sessionStorage.setItem('pa.hop', String(hop + 1)); } catch (e) {}
+
+	var q = location.search;
+	if (share && !/[?&]sharecode=/.test(q)) {
+		q += (q ? '&' : '?') + 'sharecode=' + encodeURIComponent(share);
+	}
+	location.replace('/__pa/' + origin.replace('://', '/') + location.pathname + q + location.hash);
+
+	function fail(msg) {
+		document.getElementById('box').innerHTML =
+			'<div><p>' + msg + '</p><p><a href="/">返回首页重新输入网址</a></p></div>';
+	}
+})();
+</script>
+</body>
+</html>`
 }
 
 /**
  * 兜底路由：目标站内 JS 动态提交 / 赋值的同源路径（如 /s?wd=xxx）。
  * 优先从 Referer（被代理页面）还原目标站点；Referer 缺失或不可解析时，
- * 回退到「该会话最近代理的目标站点」（见 resolveFallbackRequest），
+ * 回退到「该会话最近打开的目标站点」（见 resolveFallbackRequest），
  * 覆盖百度搜索框这类 location.href / virtual-form 提交导致的漏网请求。
  */
 app.all('*', async (req, res, next) => {
@@ -246,14 +309,20 @@ app.all('*', async (req, res, next) => {
 
 	// 文档导航：重定向回 /__pa/... 代理路径。
 	// 直接吐内容会让 iframe 的地址脱离代理前缀 —— 地址栏不再更新、后续 Referer 无法还原、
-	// 相对路径也会围绕本站根解析。子资源请求（fetch / XHR）不能重定向，否则会破坏调用方，
-	// 因此只把导航类请求 307（保留方法与请求体）到代理路径。
-	if (isNavigationRequest(req)) {
-		const share = req.query?.[SHARE_PARAM] ? String(req.query[SHARE_PARAM]) : ''
+	// 相对路径也会围绕本站根解析。
+	if (isNavigationRequest(req.headers)) {
 		res.setHeader('cache-control', 'no-store')
-		return res.redirect(307, encodeProxyUrl(result.url, share))
+		// GET/HEAD 能由浏览器端重放，交给回跳页用标签页自己的记录精确还原；
+		// POST 等带 body 的提交无法重放，只能沿用服务端记忆 307（保留方法与请求体）
+		if ((req.method === 'GET' || req.method === 'HEAD') && result.via === 'session') {
+			return res
+				.type('text/html; charset=utf-8')
+				.send(renderHopPage(result.url.origin, result.share))
+		}
+		return res.redirect(307, encodeProxyUrl(result.url, result.share))
 	}
 
+	// 子资源请求（fetch / XHR）不能重定向，否则会破坏调用方，只能直接转发
 	try {
 		await proxyRequest(req, res, result.url)
 	} catch (err2) {

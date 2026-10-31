@@ -285,13 +285,28 @@ els.frame.addEventListener('load', () => {
 	}, 4000)
 })
 
+/**
+ * iframe 当前所在的「代理视角」地址。
+ *
+ * 被代理页同源（都挂在本站下），所以能直接读到它内部。但 path-shim 会把页内
+ * location.pathname 还原成站点真实路径（否则站点自己的前端路由匹配不上），
+ * 这里读到的就不再是 /__pa/... 形式。优先用 path-shim 记录的 __PA_PATH__ 拼回
+ * 代理地址，拿不到（脚本未注入）时再退回直接读 location。
+ */
 function safeFramePath() {
 	try {
-		const p = els.frame.contentWindow?.location?.pathname
-		const q = els.frame.contentWindow?.location?.search
+		const w = els.frame.contentWindow
+		if (!w) return null
+		const p = w.location?.pathname
 		if (!p) return null
-		return `${p}${q || ''}`
+		const q = w.location?.search || ''
+		const shim = w.__PA_PATH__
+		if (shim?.targetOrigin) {
+			return `${PROXY_PREFIX}${shim.targetOrigin.replace('://', '/')}${p}${q}${w.location?.hash || ''}`
+		}
+		return `${p}${q}`
 	} catch {
+		// 跨源或已被卸载：只是地址栏不更新，不影响页面本身
 		return null
 	}
 }

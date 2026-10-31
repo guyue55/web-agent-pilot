@@ -79,6 +79,7 @@ public/
   js/app.js       设置面板、地址栏、与 iframe 通信
   js/llm-adapter.js  三种协议的请求 / 响应互转 + 连通性自检
   bridge.js       注入到被代理页面内部：反 frame 拦截、网络请求回流、驱动 PageAgent
+  path-shim.js    注入到页面最前面：把 location.pathname 还原成目标站真实路径（前端路由据此匹配）
   storage-shim.js 注入到页面最前面：localStorage / sessionStorage / IndexedDB / document.cookie 按站点隔离
   vendor/         PageAgent IIFE 包（本地自托管，不依赖外部 CDN）
 scripts/
@@ -97,6 +98,8 @@ scripts/
   check-storage.mjs 回归：按站点隔离（含 cookie、clear() 互删、storage 事件、续跑键共享）
   check-storage-fidelity.mjs 回归：shim 开/关两组对照，确认没把原生存储语义改坏
   check-rebind.mjs 回归：DNS rebinding 打不穿 HTTP / WS（自带替身 DNS 与内网受害者）
+  check-spa-route.mjs 回归：纯前端站点（skillhub）的路径还原、站内页、刷新回跳
+  check-real-sites.mjs 回归：多个真实站点与上一版基线逐站对比（自带基线服务生命周期）
   measure-panel-css.mjs 测量：目标站 CSS 对 Panel 的污染（与干净页逐属性对比）
   fixtures/      测试夹具：敌意样式页、WebSocket 测试页、回显服务、静态服务
 ```

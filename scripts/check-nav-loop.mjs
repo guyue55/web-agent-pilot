@@ -1,9 +1,13 @@
 /**
  * 回归：目标站反复自我重定向时的保护。
  *
- *  A) 知乎（实测会自我跳转 20+ 次）：应被拦下 —— iframe 断开、显示说明卡片、导航停止增长
+ *  A) 自跳转站（fixture /loop）：应被拦下 —— iframe 断开、显示说明卡片、导航停止增长
  *  B) 正常站（example.com）：不应误伤 —— 不显示卡片、面板正常、无 nav-loop
  *  C) 点「仍然继续」后计数被清空，可以再次尝试
+ *
+ * 注意 A 用本地夹具而不是知乎：知乎此前（路径还带 /__pa/ 前缀时）会自我跳转 20+ 次，
+ * 但路径被还原成 /signin 后它认为已经站在登录页，只跳一次就停 —— 用它测就测不到守卫了。
+ * 夹具站模拟的是同一类行为（每次都是完整的新文档），不依赖第三方站点当天的心情。
  */
 const pw = await import(
 	process.env.PLAYWRIGHT_CORE_PATH ||
@@ -13,7 +17,7 @@ const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
 const MOCK = process.env.MOCK || 'http://127.0.0.1:3400/v1'
-const LOOP_URL = process.env.LOOP_URL || 'https://www.zhihu.com'
+const LOOP_URL = process.env.LOOP_URL || 'http://127.0.0.1:3500/loop'
 
 const CONFIG = {
 	protocol: 'openai-chat', baseURL: MOCK, model: 'mock-model', apiKey: 'dummy-key',
@@ -71,21 +75,33 @@ async function openHost(page, target) {
 	// ---------------- C) 「仍然继续」清空计数并重新加载 ----------------
 	// 用 force 点击：此前的非强制点击会被 Playwright 的可操作性检查拦成「空点击」
 	// （页面刚从死循环里停下，滚动/布局仍在抖动），并非按钮不可用。
-	// 注意断言要看「过程」：知乎会立即再次循环、5 次后又被拦下，这正是守卫在复位。
+	// 注意断言要看「过程」：夹具站会立即再次循环、5 次后又被拦下，这正是守卫在复位。
+	// 计数清空要在「调用发生」上判定，而不是靠轮询到的瞬时值：
+	// 点完之后 iframe 立刻重新加载，bridge 会在几十毫秒内把计数重新写回去，
+	// 200ms 一次的轮询几乎必然错过 null 那一瞬间（实测就是因此误报）。
+	await page.evaluate(() => {
+		const proto = Object.getPrototypeOf(sessionStorage)
+		const orig = proto.removeItem
+		window.__removedKeys = []
+		proto.removeItem = function (k) {
+			window.__removedKeys.push(String(k))
+			return orig.call(this, k)
+		}
+	})
+
 	await page.click('#blocked-retry', { force: true })
 
-	let sawCleared = false
 	let sawReload = false
 	for (let i = 0; i < 25; i++) {
 		await page.waitForTimeout(200)
-		const snap = await page.evaluate(() => ({
-			loop: sessionStorage.getItem('pa.navLoop'),
-			src: document.getElementById('page-frame').src,
-		}))
-		if (snap.loop === null) sawCleared = true
-		if (snap.src.includes('/__pa/')) sawReload = true
-		if (sawCleared && sawReload) break
+		const src = await page.$eval('#page-frame', (el) => el.src).catch(() => '')
+		if (src.includes('/__pa/')) {
+			sawReload = true
+			break
+		}
 	}
+	const removedKeys = await page.evaluate(() => window.__removedKeys || [])
+	const sawCleared = removedKeys.includes('pa.navLoop')
 
 	const afterRetry = await page.evaluate(() => ({
 		hidden: document.getElementById('blocked-notice').hidden,
@@ -93,7 +109,7 @@ async function openHost(page, target) {
 		src: document.getElementById('page-frame').src,
 	}))
 	console.log('\n===== C) 点「仍然继续」 =====')
-	console.log('  计数曾被清空      :', sawCleared ? '✅' : '❌')
+	console.log('  计数曾被清空      :', sawCleared ? '✅' : `❌ ${JSON.stringify(removedKeys)}`)
 	console.log('  iframe 重新加载   :', sawReload ? '✅' : '❌')
 	console.log('  守卫再次生效      :', afterRetry.hidden === false ? '✅ 又被拦下' : 'ℹ️ 观测窗口内未再次触发（循环需重新累积到 5 次，属正常）')
 	await page.close()

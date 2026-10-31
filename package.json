@@ -36,6 +36,8 @@
     "check:dns": "node scripts/check-dns.mjs",
     "check:alias": "node scripts/check-tool-alias.mjs",
     "check:forward-headers": "node scripts/check-forward-headers.mjs",
+    "check:spa": "node scripts/check-spa-route.mjs",
+    "check:sites": "node scripts/check-real-sites.mjs",
     "measure:css": "node scripts/measure-panel-css.mjs"
   },
   "engines": {

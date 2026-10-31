@@ -72,7 +72,23 @@
 		}
 	}
 
+	/**
+	 * 页面真实所在的代理 URL。
+	 *
+	 * path-shim 会把 location.pathname 还原成站点真实路径（否则站点自己的前端
+	 * 路由匹配不上），所以这里不能再直接读 location —— 导航死循环计数、续跑
+	 * 记录、父窗口显示用的都是「代理视角」的地址。
+	 * 同一文档内 pushState 之后 innerPath 会变，用当前 pathname 现拼才准。
+	 */
+	function realUrl() {
+		const p = window.__PA_PATH__
+		if (!p) return location.pathname + location.search
+		return `${PROXY_PREFIX}${p.targetOrigin.replace('://', '/')}${location.pathname}${location.search}${location.hash}`
+	}
+
 	function targetBaseOrigin() {
+		// 路径已被还原时，目标站 origin 由 path-shim 直接给出，省掉一次解析
+		if (window.__PA_PATH__) return window.__PA_PATH__.targetOrigin
 		const fromLoc = matchProxy(location.pathname + location.search)
 		if (fromLoc) return fromLoc
 		const baseEl = document.querySelector('base[href]')
@@ -517,8 +533,16 @@
 	/**
 	 * 当前文档对应的目标站 host。
 	 * iframe 地址形如 /__pa/https/www.baidu.com/s?wd=x，第二个路径段之后就是 host。
+	 * 路径已被 path-shim 还原时，直接从它记录的 origin 取。
 	 */
 	function currentProxiedHost() {
+		if (window.__PA_PATH__) {
+			try {
+				return new URL(window.__PA_PATH__.targetOrigin).host
+			} catch {
+				/* 记录异常时退回路径解析 */
+			}
+		}
 		const m = /^\/__pa\/[^/]+\/([^/?#]+)/.exec(location.pathname)
 		return m ? m[1] : ''
 	}
@@ -875,7 +899,7 @@
 
 	function trackLoad() {
 		try {
-			const key = location.pathname + location.search
+			const key = realUrl()
 			const now = Date.now()
 			let prev = null
 			try {
@@ -910,13 +934,13 @@
 		const loads = trackLoad()
 		if (loads >= NAV_LOOP_LIMIT) {
 			// 不再创建 Agent / 面板：这个地址在反复重载，继续跑只会空烧调用额度
-			post({ type: 'nav-loop', count: loads, url: location.pathname + location.search })
+			post({ type: 'nav-loop', count: loads, url: realUrl() })
 			return
 		}
 		state.ready = true
 		// 极速模式：先把已存在的图片换成占位图，避免慢 CDN 拖垮整页
 		neutralizeExistingImages()
-		post({ type: 'ready', url: location.pathname + location.search })
+		post({ type: 'ready', url: realUrl() })
 		// 若已配置模型，直接在 iframe 内创建并展示 Panel（聊天 UI）
 		if (state.config) {
 			ensureAgent().catch((err) =>
