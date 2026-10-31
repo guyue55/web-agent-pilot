@@ -7,10 +7,10 @@
  *
  * 全部条目都带对照（同站往返必须能读回，否则说明是 shim 把存储写坏了）
  */
+import { chromeExe } from './lib/chrome.mjs'
 import fs from 'node:fs'
-const pw = await import('/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js')
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
-const exe = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const BASE = 'https://web-agent-pilot.app.workbuddy.host/?sharecode=IDPXOMY27M'
 
 const results = []
@@ -19,7 +19,7 @@ const ok = (cond, name, extra = '') => {
 	console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`)
 }
 
-const browser = await chromium.launch({ executablePath: fs.existsSync(exe) ? exe : undefined })
+const browser = await chromium.launch({ executablePath: chromeExe() })
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
 const page = await ctx.newPage()
 const pageErrors = []

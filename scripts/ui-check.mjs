@@ -1,8 +1,6 @@
 /** UI 冒烟：设置面板 / 打开站点 / bridge 注入 / page-agent Panel 出现 */
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://localhost:3000'
@@ -12,7 +10,7 @@ const TARGET = process.env.TARGET || 'https://example.com'
 const entry = SHARE ? `${BASE}/?sharecode=${SHARE}` : BASE
 
 const browser = await chromium.launch({
-	executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 	headless: true,
 	args: ['--no-sandbox'],
 })

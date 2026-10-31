@@ -9,13 +9,10 @@
  * 唯一允许的差异：key(i) 的枚举顺序（Chrome 原生顺序随键名变化，实测同一批
  * 带前缀键名在原生下也返回 b,a），因此比对时把键列表排序后再比。
  */
+import { chromeExe } from './lib/chrome.mjs'
 import fs from 'node:fs'
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
-const exe = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
 const SITE = process.env.SITE || '/__pa/https/example.com/'
 
@@ -76,7 +73,7 @@ const OPS = () => {
 	return out
 }
 
-const browser = await chromium.launch({ executablePath: fs.existsSync(exe) ? exe : undefined })
+const browser = await chromium.launch({ executablePath: chromeExe() })
 async function run(withShim) {
 	const ctx = await browser.newContext()
 	const page = await ctx.newPage()

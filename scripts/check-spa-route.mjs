@@ -13,11 +13,11 @@
  *
  * 依赖本机 Chrome。默认跑本地 3211，可用 BASE 覆盖。
  */
+import { chromeExe } from './lib/chrome.mjs'
 import fs from 'node:fs'
 
-const pw = await import('/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js')
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
-const exe = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
 const PROXY = `${BASE}/__pa/https/skillhub.cn`
 
@@ -27,7 +27,7 @@ const ok = (cond, name, extra = '') => {
 	console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? `  ${extra}` : ''}`)
 }
 
-const browser = await chromium.launch({ executablePath: fs.existsSync(exe) ? exe : undefined })
+const browser = await chromium.launch({ executablePath: chromeExe() })
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
 const page = await ctx.newPage()
 const docReqs = []

@@ -1,5 +1,10 @@
 # 万能网页操作 Agent
 
+[![CI](https://github.com/guyue55/web-agent-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/guyue55/web-agent-pilot/actions/workflows/ci.yml)
+[![Release](https://github.com/guyue55/web-agent-pilot/actions/workflows/release.yml/badge.svg)](https://github.com/guyue55/web-agent-pilot/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/Node-%3E%3D18.18-green.svg)](https://nodejs.org)
+
 输入任意网址 → 在页面底部的 AI 面板里用自然语言下达任务 → AI 自动点击、输入、翻页、提取数据。  
 底层由 [PageAgent](https://github.com/alibaba/page-agent) 驱动，全部操作发生在浏览器页面内，无需浏览器插件 / 无头浏览器 / VPN。
 
@@ -142,13 +147,22 @@ scripts/
 
 | 变量                 | 默认      | 说明              |
 | ------------------ | ------- | --------------- |
-| `PORT`             | `3000`  | 监听端口            |
-| `ALLOW_LOCALHOST`  | `false` | 是否允许代理本机 / 内网地址 |
+| `PORT`             | `3000`  | 监听端口（容器内需与端口映射一致） |
+| `NODE_ENV`         | 空       | 设为 `production` 启用 express 的生产优化 |
+| `ALLOW_LOCALHOST`  | `false` | 是否允许代理本机 / 内网地址（**仅本地测试用，线上勿开**） |
 | `PROXY_TIMEOUT_MS` | `70000` | 单请求代理超时（需大于 `CONNECT_TIMEOUT_MS × (重试次数+1)`） |
 | `CONNECT_TIMEOUT_MS` | `30000` | 与目标站建连超时       |
+| `PROXY_RETRY`      | `1`     | 连接层失败的重试次数（整体超时不重试） |
 | `WS_CONNECT_TIMEOUT_MS` | `15000` | WebSocket 隧道建连超时 |
+| `PROXY_DNS_MODE`   | `auto`  | 目标站解析策略：`auto`（fake-ip 直通 → DoH → 系统）/ `system` / `doh` |
+| `DNS_CACHE_TTL_MS` | `60000` | DNS 缓存时长（毫秒）    |
+| `DOH_TIMEOUT_MS`   | `2000`  | DoH 查询超时        |
+| `DNS_PROBE_TIMEOUT_MS` | `400` | 建连前的 TCP 探测超时  |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 空 | 出网需经上游代理时指定；被判定为内网的目标**不会**回退到这里重试 |
 | `DEBUG_LLM`        | 关闭      | 打印 LLM 转发日志     |
 | `DEBUG_PROXY`      | 关闭      | 打印代理细节          |
+
+完整清单与说明见 [`.env.example`](./.env.example)。
 
 ## 测试
 
@@ -211,6 +225,23 @@ BASE=http://127.0.0.1:3214 npm run check:proxy
 # A 正常站不受影响 / B 整体超时到点即收场且不重试 / C 连接失败重试一次并给出落地页
 ```
 
+### 持续集成
+
+`master` 上的 push 与 PR 会触发 [CI](./.github/workflows/ci.yml)，分四个 job：
+
+| Job       | 内容                                                             |
+| --------- | ---------------------------------------------------------------- |
+| 语法检查   | 对所有被 git 跟踪的 `.js` / `.mjs` 跑 `node --check`                |
+| 核心回归   | 请求头清洗、超时与重试、DNS rebinding（无需浏览器）                   |
+| 浏览器回归 | 存储隔离 / WS 隧道 / 导航死循环 / 续跑 / 面板 / 停止 / 工具别名       |
+| 镜像       | 构建镜像并启动容器，等待 Docker 健康检查通过                          |
+
+依赖外网的回归（`check-spa-route` / `check-real-sites` / `check-dns`）在 CI 上不稳定，
+按 [CONTRIBUTING.md](./CONTRIBUTING.md) 的说明本地手动跑。
+
+打 `v*.*.*` tag 会触发 [Release](./.github/workflows/release.yml)：构建多架构镜像推送到 GHCR，
+再把镜像拉回来跑一遍健康检查，确认「构建成功且容器真能起」。
+
 ## 部署
 
 服务只用到 `express` + `tough-cookie`，监听 `PORT`，因此可以丢到任何 Node 主机上：
@@ -222,6 +253,27 @@ npm ci && NODE_ENV=production PORT=3000 npm start
 > **出网能力决定可用率**：代理是服务端抓取目标站点，所以部署机器必须能访问外网。  
 > 本地 / 自有服务器通常可访问所有站点；托管沙箱类环境可能对部分域名限制出网  
 > （可用 `scripts/online-check.mjs` 先测一遍）。
+
+### Docker 部署
+
+镜像以非 root 用户运行，只装生产依赖，自带 `/api/health` 健康检查：
+
+```bash
+# 用已发布的镜像
+docker run -d --name web-agent-pilot -p 3000:3000 ghcr.io/guyue55/web-agent-pilot:latest
+
+# 或就地构建
+docker build -t web-agent-pilot .
+docker compose up -d
+```
+
+配置经环境变量传入（完整清单见 [`.env.example`](./.env.example)）：
+
+```bash
+docker run -d -p 3000:3000 -e PORT=3000 -e PROXY_TIMEOUT_MS=70000 ghcr.io/guyue55/web-agent-pilot:latest
+```
+
+> 镜像里不含 `scripts/`（回归脚本与夹具只用于开发 / CI），体积更小。
 
 ### 目标站域名解析（`server/dnsResolver.js`）
 

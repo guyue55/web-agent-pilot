@@ -1,8 +1,6 @@
 /** 单站点深度诊断：记录所有失败资源、iframe 控制台、任务过程 */
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://localhost:5577'
@@ -13,7 +11,7 @@ const TASK = process.env.TASK || '在搜索框输入 deepseek v4，然后点击�
 const KEY = process.env.PA_TEST_KEY
 
 const browser = await chromium.launch({
-	executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 	headless: true,
 })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })

@@ -1,0 +1,107 @@
+name: Release
+
+# 打 tag 即发布镜像：git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 镜像标签（例如 v1.0.0 或 1.0.0）
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish-image:
+    name: 构建并推送镜像
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 推导镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            # 正式 tag 推送：v1.0.0 → 1.0.0 / 1.0 / 1 / latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # latest 只由 tag 推送产生。这里不能加 is_default_branch 条件：
+            # tag 推送时 github.ref 是 refs/tags/...，该判断为 false，
+            # 会导致 latest 缺失，下面的发布后验证也就拉不到镜像。
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+            # 手动触发（workflow_dispatch）时用输入的标签
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------
+  # 发布后自证：从 GHCR 把刚推上去的镜像拉回来真跑一遍，
+  # 确认健康检查通过 —— 避免「构建成功但容器起不来」被漏过
+  # ---------------------------------------------------------------
+  verify-image:
+    name: 发布后验证
+    runs-on: ubuntu-latest
+    needs: publish-image
+    steps:
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 拉取并启动
+        run: |
+          docker pull "$IMAGE:latest"
+          docker run -d --name wap -p 3000:3000 "$IMAGE:latest"
+
+      - name: 等待健康检查
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' wap)
+            echo "health=$status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          echo '健康检查未通过：'
+          docker logs wap
+          exit 1
+
+      - name: 首页可达性
+        run: |
+          curl -fsS -o /dev/null -w 'index=%{http_code}\n' http://127.0.0.1:3000/
+          curl -fsS http://127.0.0.1:3000/api/health | head -c 300; echo
+
+      - name: 容器日志
+        if: failure()
+        run: docker logs wap || true

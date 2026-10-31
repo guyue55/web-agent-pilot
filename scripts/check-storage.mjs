@@ -14,15 +14,12 @@
  * 前置：应用已启动（默认 BASE=http://127.0.0.1:3211）
  * 用法：BASE=http://127.0.0.1:3211 node scripts/check-storage.mjs
  */
+import { chromeExe } from './lib/chrome.mjs'
 import fs from 'node:fs'
 
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
-const exe = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
 let pass = 0
 let fail = 0
@@ -36,7 +33,7 @@ const ok = (cond, label, extra = '') => {
 	}
 }
 
-const browser = await chromium.launch({ executablePath: fs.existsSync(exe) ? exe : undefined })
+const browser = await chromium.launch({ executablePath: chromeExe() })
 
 const readIdb = (page, name) =>
 	page.evaluate(

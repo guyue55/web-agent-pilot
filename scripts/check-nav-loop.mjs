@@ -9,10 +9,8 @@
  * 但路径被还原成 /signin 后它认为已经站在登录页，只跳一次就停 —— 用它测就测不到守卫了。
  * 夹具站模拟的是同一类行为（每次都是完整的新文档），不依赖第三方站点当天的心情。
  */
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
@@ -26,7 +24,7 @@ const CONFIG = {
 }
 
 const browser = await chromium.launch({
-	executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 })
 
 async function openHost(page, target) {

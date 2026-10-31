@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 已知限制（先看这里）
+    url: https://github.com/guyue55/web-agent-pilot#已知限制
+    about: 反爬站点（Cloudflare 五秒盾、指纹校验）、会校验域名的站点等属于已知限制，请先确认不在其中。
+  - name: 安全问题请走私下报告
+    url: https://github.com/guyue55/web-agent-pilot/security/policy
+    about: 涉及 SSRF 绕过、凭据外泄等安全问题请勿开公开 issue，按 SECURITY.md 私下报告。

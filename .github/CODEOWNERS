@@ -1,0 +1,7 @@
+# 默认全部由维护者审阅
+*                       @guyue55
+
+# 安全相关改动（SSRF 校验、DNS 解析、请求头处理）需要额外仔细看
+/server/security.js     @guyue55
+/server/dnsResolver.js  @guyue55
+/server/proxy.js        @guyue55

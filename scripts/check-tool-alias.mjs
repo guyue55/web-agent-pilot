@@ -20,14 +20,12 @@
  * 前置：应用已启动（默认 BASE=http://127.0.0.1:3211）
  * 用法：BASE=http://127.0.0.1:3211 node scripts/check-tool-alias.mjs
  */
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
 const MOCK_PORT = Number(process.env.ALIAS_MOCK_PORT || 3405)
-const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+const CHROME = chromeExe()
 
 let pass = 0
 let fail = 0

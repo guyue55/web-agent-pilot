@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # 运行期依赖：只报安全问题与补丁级升级，避免 minor 变动悄悄改变代理行为
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    allow:
+      - dependency-type: production
+    labels: ['dependencies', 'production']
+    commit-message:
+      prefix: 'chore(deps)'
+      prefix-development: 'chore(dev-deps)'
+
+  # 开发期依赖（playwright-core 等）：允许 minor，但同样走 CI
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: development
+    labels: ['dependencies', 'development']
+    commit-message:
+      prefix: 'chore(dev-deps)'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: ['dependencies', 'ci']
+    commit-message:
+      prefix: 'chore(ci)'
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    labels: ['dependencies', 'docker']
+    commit-message:
+      prefix: 'chore(docker)'

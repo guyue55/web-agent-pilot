@@ -1,0 +1,31 @@
+services:
+  web-agent-pilot:
+    # 优先用 GHCR 上已发布的镜像；需要跑本地改动时把 build: . 取消注释
+    image: ghcr.io/guyue55/web-agent-pilot:latest
+    build: .
+    container_name: web-agent-pilot
+    restart: unless-stopped
+    ports:
+      # 宿主端口可按需改，容器内端口必须与 PORT 一致
+      - '3000:3000'
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      # 线上不要开启；仅在需要代理本机服务时设为 true
+      ALLOW_LOCALHOST: 'false'
+    env_file:
+      # 可选：把敏感/个性化配置放在 .env（已 gitignore）
+      - path: .env
+        required: false
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

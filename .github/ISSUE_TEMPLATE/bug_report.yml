@@ -1,0 +1,87 @@
+name: 缺陷报告
+description: 某个站点打不开、Agent 点错、内容缺失等异常行为
+title: '[Bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。为了能复现，请尽量把下面几项填全 —— 尤其是**目标网址**和**具体现象**，
+        只写「用不了」通常无法定位。
+
+  - type: input
+    id: target-url
+    attributes:
+      label: 目标网址
+      description: 你让 Agent 操作的站点地址（若涉及敏感站点，可用 example.com 之类的同类型站点替代，只要现象一致）
+      placeholder: https://example.com
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 实际发生了什么
+      description: 越具体越好 —— 页面空白？渲染出站点自己的 404？点了没反应？控制台报错？
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望发生什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 ...
+        2. 输入任务「...」
+        3. 观察到 ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题大致属于哪一块
+      options:
+        - 页面加载 / 代理（内容不全、样式错乱、404、超时）
+        - Agent 动作（点错元素、输入失败、工具名报错）
+        - 登录态 / Cookie / 存储隔离
+        - WebSocket / 实时通信
+        - 面板 UI（浮层错位、按钮无响应）
+        - 安全（SSRF、请求头外泄）
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志与截图
+      description: |
+        浏览器控制台输出、服务端日志（可用 DEBUG_PROXY=1 或 DEBUG_LLM=1 启动获取）、截图。
+        提交前请自行打码掉 API Key、Cookie、访问码等敏感信息。
+      render: shell
+
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境
+      placeholder: 例如：macOS 15 / Chrome 131 / Node 22.22 / 本地 npm start
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认项
+      options:
+        - label: 我已确认直连该站点是正常的（排除站点自身故障/反爬）
+          required: false
+        - label: 提交内容中不含 API Key、Cookie、访问码
+          required: true

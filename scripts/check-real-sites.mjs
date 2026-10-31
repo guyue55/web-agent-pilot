@@ -11,12 +11,12 @@
  *   BASELINE_DIR 指向上一版代码目录时，脚本会自己拉起它、跑完再关掉
  *   （长期挂后台的服务在本机会被回收，不如让被测流程自己管理生命周期）。
  */
+import { chromeExe } from './lib/chrome.mjs'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 
-const pw = await import('/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js')
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
-const exe = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
 const BASELINE_DIR = process.env.BASELINE_DIR || ''
 const BASELINE_PORT = Number(process.env.BASELINE_PORT || 3212)
@@ -75,7 +75,7 @@ const SITES = (
 	].join(',')
 ).split(',')
 
-const browser = await chromium.launch({ executablePath: fs.existsSync(exe) ? exe : undefined })
+const browser = await chromium.launch({ executablePath: chromeExe() })
 
 async function probe(url) {
 	const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 800 } })

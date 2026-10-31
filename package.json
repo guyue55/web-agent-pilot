@@ -1,5 +1,5 @@
 {
-  "name": "ai-auto-web",
+  "name": "web-agent-pilot",
   "version": "1.0.0",
   "private": true,
   "description": "万能网页操作 Agent —— 输入任意网址，用自然语言让 AI 帮你操作网页",
@@ -16,9 +16,18 @@
   "license": "MIT",
   "type": "module",
   "main": "server/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guyue55/web-agent-pilot.git"
+  },
+  "homepage": "https://github.com/guyue55/web-agent-pilot#readme",
+  "bugs": {
+    "url": "https://github.com/guyue55/web-agent-pilot/issues"
+  },
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
+    "check:syntax": "node scripts/check-syntax.mjs",
     "test:smoke": "node scripts/smoke-test.mjs",
     "test:ui": "node scripts/ui-check.mjs",
     "mock:llm": "node scripts/mock-llm.mjs",
@@ -47,5 +56,8 @@
     "express": "^4.21.2",
     "tough-cookie": "^5.1.2",
     "undici": "^6.29.1"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
   }
 }

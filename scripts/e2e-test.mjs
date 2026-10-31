@@ -5,9 +5,9 @@
  *   node scripts/e2e-test.mjs [protocol]
  *   PROTOCOL=openai-chat|openai-responses|anthropic
  */
+import { chromeExe } from './lib/chrome.mjs'
 const PW_PATH =
-	process.env.PLAYWRIGHT_CORE_PATH ||
-	'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
+	'playwright-core'
 const pw = await import(PW_PATH)
 const chromium = pw.default?.chromium ?? pw.chromium
 
@@ -39,7 +39,7 @@ if (!KEY) {
 }
 
 const browser = await chromium.launch({
-	executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 	headless: true,
 	args: ['--no-sandbox'],
 })

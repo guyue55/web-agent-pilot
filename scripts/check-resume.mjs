@@ -5,10 +5,8 @@
  * 期望：新页面 Agent 就绪后自动续跑原任务；续跑次数有上限；任务完成后记录被清除。
  */
 // playwright-core 不在项目依赖内，沿用 ui-check.mjs 的约定：可用 PLAYWRIGHT_CORE_PATH 覆盖
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
@@ -36,7 +34,7 @@ const mockLog = () => fetch('http://127.0.0.1:3401/__log').then((r) => r.json())
 const mockReset = () => fetch('http://127.0.0.1:3401/__reset').then((r) => r.text())
 
 const browser = await chromium.launch({
-	executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 })
 const page = await browser.newPage()
 

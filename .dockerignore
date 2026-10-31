@@ -1,0 +1,29 @@
+# 依赖：镜像内由 npm ci 重新安装，且要匹配容器平台
+node_modules/
+
+# 版本控制与 CI（不参与构建）
+.git/
+.github/
+.gitattributes
+.editorconfig
+
+# 回归脚本与夹具：仅开发/CI 使用，镜像运行不需要
+scripts/
+docs/
+staging/
+coverage/
+
+# 本地工具状态与部署标识
+.workbuddy/
+.wbapp*.genie
+
+# 环境变量与密钥（切勿打进镜像）
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 操作系统
+.vscode/
+.idea/
+.DS_Store
+*.log

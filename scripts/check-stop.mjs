@@ -6,10 +6,8 @@
  * 表现为「点了停止，界面却长时间卡在执行中」。
  */
 // playwright-core 不在项目依赖内，沿用 ui-check.mjs 的约定：可用 PLAYWRIGHT_CORE_PATH 覆盖
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
@@ -32,7 +30,7 @@ const CONFIG = {
 	extraHeaders: {},
 }
 
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
+const browser = await chromium.launch({ executablePath: chromeExe() })
 const page = await browser.newPage()
 page.on('console', (m) => {
 	const t = m.text()

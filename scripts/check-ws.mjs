@@ -10,10 +10,8 @@
  *  B) WebSocket 的静态常量没丢（之前「重写原型」的写法会把它们弄丢）
  *  C) 未授权目标（内网/本机在 ALLOW_LOCALHOST 关闭时）被拒 —— 由 curl 侧单独验证
  */
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3211'
@@ -27,7 +25,7 @@ const CONFIG = {
 }
 
 const browser = await chromium.launch({
-	executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 })
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 await page.addInitScript((s) => {

@@ -1,8 +1,6 @@
 /** 在 iframe 内直接驱动 bridge，捕获异常细节 */
-const pw = await import(
-	process.env.PLAYWRIGHT_CORE_PATH ||
-		'/Users/guyue/.workbuddy/binaries/node/workspace/node_modules/playwright-core/index.js'
-)
+import { chromeExe } from './lib/chrome.mjs'
+const pw = await import('playwright-core')
 const chromium = pw.default?.chromium ?? pw.chromium
 
 const BASE = process.env.BASE || 'http://localhost:5577'
@@ -19,7 +17,7 @@ const BASE_URLS = {
 const entry = SHARE ? `${BASE}/?sharecode=${SHARE}` : BASE
 
 const browser = await chromium.launch({
-	executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+	executablePath: chromeExe(),
 	headless: true,
 	args: ['--no-sandbox'],
 })
