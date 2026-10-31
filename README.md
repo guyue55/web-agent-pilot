@@ -189,6 +189,7 @@ npm run check:fidelity  # 语义保真：shim 开/关两组跑同一段操作，
 npm run check:rebind    # DNS rebinding 打不穿 HTTP 与 WS 两条路径（脚本自带替身 DNS）
 npm run check:dns       # 目标站解析：DoH 优先 / 连不上回退系统解析 / fake-ip 环境放行
 npm run check:alias     # 模型把 execute_javascript 写成 script 时不会整轮报废
+npm run check:forward-headers  # 转发给目标站的头里不能混进 x-forwarded-* / via / cdn-loop 等代理链元信息
 ```
 
 # 测量目标站 CSS 对 Panel 的污染（默认对比 example / 淘宝 / 知乎 / 必应）

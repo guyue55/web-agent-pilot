@@ -47,6 +47,14 @@ http
 			return
 		}
 
+		// ---- 供「请求头透传」回归使用的回显端点 ----
+		// 返回 JSON（非 text/html），代理层不做重写，能原样看到上游真正收到了什么头。
+		if (url === '/headers') {
+			res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+			res.end(JSON.stringify({ method: req.method, url: req.url, headers: req.headers }))
+			return
+		}
+
 		const file = path.join(ROOT, url === '/' ? 'hostile-css.html' : url)
 		if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
 			res.writeHead(404).end('not found')

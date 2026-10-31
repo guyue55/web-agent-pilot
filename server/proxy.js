@@ -61,7 +61,77 @@ const STRIP_REQUEST_HEADERS = [
 	'sec-fetch-site', // 让目标站认为这是一次正常的 same-site 之外的直接访问
 	'sec-fetch-dest', // 避免目标站据此判定"被嵌在 iframe 中"而降级或拒绝响应
 	'accept-encoding', // 交由 node fetch 自行协商，避免二次压缩
+	// ---- 转发层元信息：一律不能带给目标站 ----
+	// 这些头是「我们所在环境」的网关加进来的，代表的是代理链而不是用户。
+	// 实测（线上 CloudStudio 环境）：把 x-forwarded-host 带给 skillhub.cn，
+	// 目标站前置的 EdgeOne 会因 Host 与 X-Forwarded-Host 不一致而直接返回
+	// 默认错误页（"糟糕，页面好像去火星了"），页面看起来像目标站 404，实则是我们造成的。
+	// 二分定位：28 个网关头里仅 x-forwarded-host 一个就能稳定触发。
+	'forwarded',
+	'via',
+	'cdn-loop',
+	'x-real-ip',
+	'true-client-ip',
+	'x-client-ip',
+	'x-cluster-client-ip',
+	'x-original-forwarded-for',
+	'proxy-connection',
+	// 分布式链路标识：属于我们这一跳，带过去只会让目标站误判为同一条链路
+	'traceparent',
+	'tracestate',
+	'x-client-proto',
+	'x-client-proto-ver',
 ]
+
+/**
+ * 前缀匹配的「代理链 / 平台身份」头。
+ *
+ * 线上实测：网关会给每个请求加 x-forwarded-*、x-wb-share-code、x-wb-base-url、
+ * x-space-key、eo-log-uuid、stgw-request-id、x-stgw-time ……
+ * 其中 x-space-key 与 x-wb-share-code 直接暴露「哪个沙箱、哪个访问码」，
+ * 对一个第三方站点来说是完全不该知道的内部标识。
+ */
+const STRIP_REQUEST_PREFIXES = [
+	'x-forwarded-',
+	'x-wb-',
+	'x-pa-',
+	'x-proxy-',
+	'x-stgw-',
+	'x-space-',
+	'eo-',
+	'stgw-',
+]
+
+/**
+ * 判断 Authorization 是否是「平台签发的凭证」。
+ *
+ * 线上实测：网关把
+ *   Authorization: Bearer eyJhbGciOiJIUzI1NiIs... （payload: iss=cloudstudio.net,
+ *   space=<沙箱 ID>, user_id=..., user_nickname=..., exp=3 天后）
+ * 挂在每个请求上。此前代理会把它原样转发给目标站 —— 等于把用户的平台身份令牌
+ * 交给任意第三方网站。这里按 JWT payload 识别后丢弃，站点自己的
+ * `Authorization: Bearer <自己的 token>` 仍然照常转发（不破坏站点登录/API 调用）。
+ */
+function isPlatformCredential(value, spaceKey) {
+	const m = /^Bearer\s+([\w-]+)\.([\w-]+)\./i.exec(String(value || ''))
+	if (!m) return false
+	try {
+		const b64 = m[2].replace(/-/g, '+').replace(/_/g, '/')
+		const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf-8'))
+		if (spaceKey && payload.space && String(payload.space) === String(spaceKey)) return true
+		return typeof payload.iss === 'string' && /cloudstudio|workbuddy/i.test(payload.iss)
+	} catch {
+		return false
+	}
+}
+
+/** 文档级导航：浏览器不会在这种请求上带 Authorization，带上的一定是环境加的 */
+function isNavigationRequest(headers) {
+	const mode = String(headers['sec-fetch-mode'] || '')
+	if (mode) return mode === 'navigate'
+	const dest = String(headers['sec-fetch-dest'] || '')
+	return dest === 'document' || dest === 'iframe'
+}
 
 const DEFAULT_UA =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
@@ -248,11 +318,22 @@ function pick(value) {
 
 function buildRequestHeaders(req, jar, cookieHeader) {
 	const headers = new Headers()
+	const spaceKey = String(req.headers['x-space-key'] || '')
+	const navigation = isNavigationRequest(req.headers)
 	for (const [key, value] of Object.entries(req.headers)) {
 		const lower = key.toLowerCase()
 		if (STRIP_REQUEST_HEADERS.includes(lower)) continue
+		if (STRIP_REQUEST_PREFIXES.some((p) => lower.startsWith(p))) continue
 		if (HOP_BY_HOP.includes(lower)) continue
 		if (value === undefined) continue
+		if (lower === 'authorization') {
+			const raw = pick(value).join(', ')
+			// 导航请求上浏览器不可能带 Authorization，带上的一定是环境注入的；
+			// 非导航（页面自己的 fetch/XHR）只拦平台签发的那一枚，站点自己的令牌照常放行。
+			if (navigation || isPlatformCredential(raw, spaceKey)) continue
+			headers.set(key, raw)
+			continue
+		}
 		headers.set(key, pick(value).join(', '))
 	}
 	if (cookieHeader) headers.set('cookie', cookieHeader)
@@ -311,6 +392,18 @@ export async function proxyRequest(req, res, targetUrl) {
 		else headers.delete('referer')
 	}
 	const refererForBase = originalReferer ? new URL(originalReferer) : null
+
+	// Origin 与 Referer 同类：本站域名不该出现在目标站眼里。
+	// 既暴露代理站点，也会让目标站的后端把表单 / XHR 判成跨站请求而拒绝。
+	const ownHost = String(req.headers.host || '')
+	const origin = headers.get('origin')
+	if (origin && ownHost) {
+		try {
+			if (new URL(origin).host === ownHost) headers.set('origin', targetUrl.origin)
+		} catch {
+			headers.delete('origin')
+		}
+	}
 
 	let controller = new AbortController()
 	let timedOut = false
