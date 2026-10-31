@@ -238,11 +238,13 @@ export function rewriteHtml(html, base, bridgeScript = '/_app/bridge.js', share 
 	// storage shim 必须排在所有页面脚本之前：代理页共用同一个源，
 	// 不先接管 localStorage / sessionStorage，不同站点的数据就会互相串味。
 	const storageShim = appendQuery('/_app/storage-shim.js', {
-		o: base.origin,
 		[SHARE_PARAM]: share,
 	})
+	// 目标站 origin 走 data 属性而不是 ?o=：线上网关会把「查询串里带 URL」的请求
+	// 直接 403（实测 /_app/bridge.js?o=https%3A%2F%2F... 与 /app.js?u=https%3A%2F%2F...
+	// 都被拦），那样 shim 脚本根本加载不到，跨站隔离会静默失效。
 	const injection =
-		`<script src="${escapeHtmlAttr(storageShim)}"></script>` +
+		`<script src="${escapeHtmlAttr(storageShim)}" data-pa-o="${escapeHtmlAttr(base.origin)}"></script>` +
 		`<base href="${escapeHtmlAttr(encodeProxyUrl(base))}">` +
 		`<script src="${escapeHtmlAttr(appendQuery(bridgeScript, { [SHARE_PARAM]: share }))}"></script>`
 

@@ -18,10 +18,21 @@
 ;(function () {
 	'use strict'
 
+	// 目标站 origin 有三条来源，按「显式 → 隐含」优先级取第一个可用的：
+	//  1. 注入时写在标签上的 data-pa-o（服务端已知，最准）
+	//  2. 代理路径自身：location.pathname 形如 /__pa/https/example.com/xxx，
+	//     由它反推 origin —— 线上网关会拦掉「查询串里带 URL」的请求（实测 403），
+	//     所以不能只依赖 URL 参数，这条兜底让注入参数彻底丢失时也能工作
+	//  3. 兼容旧参数 ?o=
 	let targetOrigin = ''
 	try {
-		const src = document.currentScript && document.currentScript.src
-		if (src) targetOrigin = new URL(src).searchParams.get('o') || ''
+		const el = document.currentScript
+		targetOrigin = (el && el.getAttribute && el.getAttribute('data-pa-o')) || ''
+		if (!targetOrigin) {
+			const m = /^\/__pa\/(https?)\/([^/?#]+)/.exec(window.location.pathname)
+			if (m) targetOrigin = `${m[1]}://${m[2]}`
+		}
+		if (!targetOrigin && el && el.src) targetOrigin = new URL(el.src).searchParams.get('o') || ''
 	} catch {
 		targetOrigin = ''
 	}
