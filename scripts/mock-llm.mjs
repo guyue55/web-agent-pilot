@@ -1,4 +1,9 @@
 // Mock LLM：延迟 N 毫秒后返回 OpenAI 格式响应，用于验证请求是否被真正中断
+//
+// 注意：本服务占用**两个**端口 —— PORT（模型接口）与 PORT+1（/__log、/__reset 日志接口）。
+// 因此同一台机器上不要起 MOCK_PORT 相邻的两个实例（例如 3400 与 3401），
+// 否则后者的模型端口会抢占前者的日志端口，前者因 EADDRINUSE 崩溃，
+// 连带 PORT 也一起不可用（实测表现：3400 一直连不上）。
 import http from 'node:http'
 
 const PORT = Number(process.env.MOCK_PORT || 3400)

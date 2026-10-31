@@ -28,10 +28,13 @@ ALLOW_LOCALHOST=true PORT=3211 node server/index.js &
 # 否则请求会走出网隧道，连接错误类型变了，回归会假失败
 PORT=3214 ALLOW_LOCALHOST=true PROXY_TIMEOUT_MS=1200 PROXY_RETRY=1 CONNECT_TIMEOUT_MS=3000 node server/index.js &
 MOCK_PORT=3400 node scripts/mock-llm.mjs &
-MOCK_PORT=3401 node scripts/mock-llm.mjs &
 node scripts/fixtures/fixtures-server.mjs &
 node scripts/fixtures/ws-echo-server.mjs &
 ```
+
+> `mock-llm` 占用**两个**端口：`MOCK_PORT`（模型接口）与 `MOCK_PORT+1`（`/__log`、`/__reset`
+> 日志接口，续跑回归读的是它）。因此**只起一个实例**即可 —— 不要为了「隔离日志」再起一个
+> `MOCK_PORT=3401`：后起的会抢占前一个的日志端口，前者崩溃后连 3400 都不可用。
 
 `ALLOW_LOCALHOST=true` 是必需的 —— 夹具服务在 `127.0.0.1`，默认会被 SSRF 校验拦掉。
 
