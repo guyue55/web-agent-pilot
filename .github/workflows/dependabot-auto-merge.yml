@@ -1,0 +1,52 @@
+name: dependabot-auto-merge
+
+# 仅对 Dependabot 发起的 PR 生效：安全更新或 patch 级升级自动审批并启用 auto-merge。
+# 受 master 分支保护约束——仍需 code owner（@guyue55）最终放行，CI 必须全绿。
+on:
+  pull_request_target:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    # 只处理 Dependabot 自己的 PR
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: 获取 Dependabot 元数据
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 判断是否满足自动合并条件
+        id: decide
+        env:
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          ALERTS: ${{ steps.metadata.outputs.alerts }}
+        run: |
+          echo "update-type=$UPDATE_TYPE"
+          echo "alerts=${ALERTS:-(空)}"
+          # 安全更新（含 GHSA/CVE）或 semver-patch 级升级 -> 自动合并
+          if [ "$UPDATE_TYPE" = "version-update:semver-patch" ] || \
+             echo "${ALERTS:-[]}" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            echo "auto=true" >> "$GITHUB_OUTPUT"
+            echo "满足条件：将自动审批并启用 auto-merge"
+          else
+            echo "auto=false" >> "$GITHUB_OUTPUT"
+            echo "不满足条件（minor/major 非安全升级）：保持人工评审"
+          fi
+
+      - name: 自动审批并提示合并
+        if: steps.decide.outputs.auto == 'true'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr comment "$PR_URL" --body "🤖 已自动审批：本 PR 为安全更新 / patch 级升级，CI 已自动验证。请 @guyue55 作为 code owner 审阅后合并。
+
+（说明：当前仓库尚未开启 GitHub 的 auto-merge 总开关，故未自动合并；如需全自动，可在仓库 Settings → General → Pull Requests 勾选 Allow auto-merge，再让我把本 workflow 切换为自动合并。）"
