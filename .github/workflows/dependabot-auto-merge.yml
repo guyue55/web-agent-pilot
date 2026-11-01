@@ -47,6 +47,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review --approve "$PR_URL"
-          gh pr comment "$PR_URL" --body "🤖 已自动审批：本 PR 为安全更新 / patch 级升级，CI 已自动验证。请 @guyue55 作为 code owner 审阅后合并。
-
-（说明：当前仓库尚未开启 GitHub 的 auto-merge 总开关，故未自动合并；如需全自动，可在仓库 Settings → General → Pull Requests 勾选 Allow auto-merge，再让我把本 workflow 切换为自动合并。）"
+          gh pr comment "$PR_URL" --body "🤖 已自动审批：本 PR 为安全更新/patch 级升级，CI 已自动验证。请 @guyue55 作为 code owner 审阅后合并。如需全自动，可在仓库 Settings -> General -> Pull Requests 勾选 Allow auto-merge，再让我把本 workflow 切换为自动合并。"
