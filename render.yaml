@@ -1,0 +1,23 @@
+# Render Blueprint —— 连接本仓库即可一键创建免费 Web 服务
+# 用法：Render Dashboard → New → Blueprint → 选本仓库；Render 自动读取本文件
+# 规格参考：https://render.com/docs/blueprint-spec  |  免费额度：https://render.com/docs/free
+#
+# 为什么是 Web Service 而不是 Static Site：
+#   本项目核心是「服务端同源反代 + WebSocket 隧道」，必须有长驻 Node 进程，
+#   静态站点无法执行 /api/resolve、/__pa/*、/__paws/*（见 docs/deployment-free-hosting.md）。
+services:
+  - type: web
+    name: web-agent-pilot
+    runtime: node
+    # 必须显式写 free：省略时新服务默认付费套餐 0.5c-512mb
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    # 容器/Node 启动后由 Render 探测该路径判定健康；本项目已内置 /api/health
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # 安全默认：禁止代理本机/内网地址（SSRF 防护）。线上切勿改为 true
+      - key: ALLOW_LOCALHOST
+        value: "false"

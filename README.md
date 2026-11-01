@@ -254,6 +254,8 @@ npm ci && NODE_ENV=production PORT=3000 npm start
 > 本地 / 自有服务器通常可访问所有站点；托管沙箱类环境可能对部分域名限制出网  
 > （可用 `scripts/online-check.mjs` 先测一遍）。
 
+> 📚 **免费托管选型与逐步部署手册**（各平台免费额度对比、Render 一键蓝图 `render.yaml`、部署后验证清单、复用 checklist）：[docs/deployment-free-hosting.md](./docs/deployment-free-hosting.md)。
+
 ### Docker 部署
 
 镜像以非 root 用户运行，只装生产依赖，自带 `/api/health` 健康检查：
